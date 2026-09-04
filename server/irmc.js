@@ -43,6 +43,10 @@ const CONFIG_ALL = 31;
 class NeedMore extends Error {}
 const NEEDMORE = new NeedMore();
 
+// Debug diagnostics gate: enabled via start.sh --debug (env IRMC_DEBUG=1).
+const IRMC_DBG = process.env.IRMC_DEBUG === '1';
+function irmcDbg() { return IRMC_DBG; }
+
 // Permissive TLS for old iRMC firmware: allow TLS 1.0/1.1 and legacy ciphers /
 // SHA-1 signatures. Node defaults to TLSv1.2 + security level 2, which old
 // iRMC refuses (ssl_choose_client_version).
@@ -268,6 +272,8 @@ export class IrmcClient {
       }
       case ID.InformVesaMode: {
         const mode = r.u16(), width = r.u16(), height = r.u16(), bpp = r.u16();
+        if (irmcDbg()) console.log(`[irmc][vesa] mode=${mode} ${width}x${height}@${bpp}`);
+        if (this.fb.mode !== mode && this.fb.mode !== -1) irmcDbg() && console.log(`[irmc][vesa] mode transition ${this.fb.mode} -> ${mode}`);
         this.width = width; this.height = height; this.bpp = bpp;
         this.fb.setVesaMode(mode, bpp, width, height);
         this.events.onStatus?.(`vesa:${width}x${height}@${bpp}`);

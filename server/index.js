@@ -87,6 +87,9 @@ async function startSession(sess, host, user, pass, port, secure) {
     onError: (e) => { sess.error = e; sess.state = 'error'; sess.notifyFrame && null; },
     onExit: () => { sess.state = 'closed'; },
     onFrame: (fb, rects) => {
+      if (process.env.IRMC_DEBUG === '1' && (fb.width !== sess.width || fb.height !== sess.height)) {
+        console.log(`[dbg] framebuffer size ${sess.width}x${sess.height} -> ${fb.width}x${fb.height} (rects=${rects ? rects.length : 0})`);
+      }
       sess.width = fb.width; sess.height = fb.height;
       sess.lastFrameAt = Date.now();
       for (const cb of sess.listeners) cb(fb, rects);

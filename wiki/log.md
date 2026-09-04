@@ -338,3 +338,9 @@ Java (PixelBufferImage.enhanceBitBltHLC / EnhanceBitBlt.readBuffer):
   перепроверяется текущее разрешение.
 - новый лёгкий accessor sess.fbSize() (без полноэкранного getRGB).
 - RequestVesaMode(241) НЕ используется (по wiki вызывает сброс видеорежима).
+
+## [2026-09-04] project | start.sh --help/--debug
+- start.sh: добавлены `--help` (описание ключей), `--debug` (вкл. диагностику
+  переходов разрешений/режима), `--port N`, `--log-dir DIR`.
+- Режим `--debug` = env IRMC_DEBUG=1: логируются InformVesaMode (mode/WxH@bpp,
+  в т.ч. текстовый режим загрузки) + переходы размера фреймбуфера.
