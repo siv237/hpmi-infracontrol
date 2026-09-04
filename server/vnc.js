@@ -5,6 +5,29 @@
 
 const RFB = Buffer.from('RFB 003.008\n', 'ascii');
 
+// Lightweight diagnostic logger (reconnect debugging). Only active when the
+// dbg file is explicitly requested, so normal operation stays silent.
+import { appendFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+const _vncDbgFile = (() => {
+  try { return join(dirname(fileURLToPath(import.meta.url)), 'dbg-vnc.log'); } catch { return null; }
+})();
+let _vncDbg = null;
+function vdbg(msg) {
+  try {
+    if (_vncDbg === undefined) _vncDbg = process.env.VNC_DBG === '1';
+    if (!_vncDbg) return;
+    const line = `[${new Date().toISOString().slice(11, 23)}] vnc ${msg}`;
+    // also to stdout so it lands in logs/server.log via start.sh tee
+    if (typeof console !== 'undefined') { try { console.log(line); } catch {} }
+    appendFile(_vncDbgFile, `[${new Date().toISOString()}] ${msg}\n`).catch(() => {});
+  } catch {}
+}
+// bytes sent to noVNC, kept for debugging the last frame
+const _lastSent = { len: 0, secondHex: '' };
+function vdbg_sent(b) { try { _lastSent.len = b.length; _lastSent.secondHex = b.subarray(0, 2).toString('hex'); } catch {} }
+
 // iRMC 0xd1 KeyStateChange wants a USB HID usage code (u16le). noVNC instead
 // sends X11 keysyms over RFB (e.g. 'a'=0x61, Enter=0xff0d). Shift/alt/ctrl
 // arrive as *separate* modifier keysym events, so here each keysym maps to its
@@ -46,57 +69,109 @@ const KEYSYM_TO_HID = {
 
 export function attachVnc(ws, sess) {
   // sess: { fb(), subscribe(cb), unsubscribe(cb), key(scancode,down), mouseMove(x,y), buttonState(x,y,mask), onClose() }
-  const write = (b) => { if (ws.readyState === 1) ws.send(b); };
+  const write = (b) => { if (ws.readyState === 1) { ws.send(b); vdbg_sent(b); } };
 
   let buf = Buffer.alloc(0);
   let phase = 'version';
   let clientFmt = null; // {bpp, redShift, greenShift, blueShift, redMax, greenMax, blueMax}
   let keepalive = null;
 
-  const frameCb = (rects) => {
+  // Update scheduling: iRMC frames are pushed; coalesce to at most one wire
+  // update per tick and never queue unbounded (backpressure), otherwise the
+  // browser renders minutes-old frames and input appears to lag by tens of s.
+  let pendingRects = null;   // null = nothing pending; [] merges to full screen
+  let pendingFull = false;
+  let flushTimer = null;
+  let flushing = false;
+  const MAX_BUFFERED = 1 << 20; // skip frames while >1MB is unsent in the socket
+  const FRAME_MS = 40;          // ~25 fps cap
+
+  const frameCb = (fb, rects) => {
     if (phase !== 'ready') return;
-    sendUpdate(rects);
+    if (pendingRects === null) pendingRects = [];
+    if (rects && rects.length) pendingRects.push(...rects);
+    scheduleFlush();
   };
 
-  function fail(msg) { try { ws.close(1002, msg); } catch {} atexit(); }
+  function scheduleFlush() {
+    if (flushTimer || flushing || phase !== 'ready') return;
+    flushTimer = setTimeout(() => { flushTimer = null; doFlush(); }, FRAME_MS);
+  }
 
-  function atexit() { if (keepalive) clearInterval(keepalive); sess.unsubscribe(frameCb); }
+  function doFlush() {
+    if (flushing) return;
+    flushing = true;
+    try {
+      if (ws.readyState !== 1) { vdbg(`flush: ws not open (rs=${ws.readyState})`); return; }
+      if (ws.bufferedAmount > MAX_BUFFERED) {
+        vdbg(`flush: backpressure buffered=${ws.bufferedAmount} -> reserve full`);
+        // Client can't keep up: drop the stale partial queue, resend a full
+        // frame once the socket drains.
+        pendingRects = null;
+        pendingFull = true;
+        setTimeout(scheduleFlush, 100);
+        return;
+      }
+      const full = pendingFull || pendingRects === null;
+      const rects = pendingRects;
+      pendingRects = null;
+      pendingFull = false;
+      vdbg(`flush: full=${full} rects=${rects ? rects.length : 'null'} buffered=${ws.bufferedAmount}`);
+      if (full) sendUpdate(null);
+      else if (rects && rects.length) sendUpdate(rects);
+    } finally {
+      flushing = false;
+    }
+  }
+
+  function fail(msg) { vdbg(`fail(${msg})`); try { ws.close(1002, msg); } catch {} atexit(); }
+
+  function vdbgPhase(s) { if (process.env.VNC_DBG === '1') vdbg(`phase ${phase}->${s}`); }
+
+  function atexit() {
+    if (keepalive) clearInterval(keepalive);
+    if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+    sess.unsubscribe(frameCb);
+  }
 
   function sendUpdate(rects) {
-    const fb = sess.fb();
-    const { width, height, pix } = fb;
-    // Validate rects
-    const rs = (rects && rects.length ? rects : [{ x: 0, y: 0, w: width, h: height }])
-      .filter((r) => r.w > 0 && r.h > 0 && r.x >= 0 && r.y >= 0 && r.x < width && r.y < height)
-      .slice(0, 64);
-    if (!rs.length) return;
-    const w = fb.width, h = fb.height;
-    const header = Buffer.alloc(4 + rs.length * 12);
-    header[0] = 0; // FramebufferUpdate
-    header[1] = 0;
-    header.writeUInt16BE(rs.length, 2);
-    let off = 4;
-    let payload = [];
+    const probe = sess.fb();
+    const w = probe.width, h = probe.height;
+    if (!w || !h) return;
+    // Validate rects; too many small rects -> one full-screen rect.
+    let rs;
+    if (rects && rects.length) {
+      rs = rects.filter((r) => r.w > 0 && r.h > 0 && r.x >= 0 && r.y >= 0 && r.x < w && r.y < h);
+      if (rs.length > 64) rs = null;
+    } else rs = null;
+    if (!rs) rs = [{ x: 0, y: 0, w, h }];
+    const fb = sess.fb(rs); // expand only the regions we are about to send
+    vdbg(`sendUpdate fb=${w}x${h} rects=${rs.length} ${rs.map(r=>`${r.x},${r.y}:${r.w}x${r.h}`).join(' ')}`);
+    // RFB FramebufferUpdate layout REQUIRES each rect header to be immediately
+    // followed by its own data: [msg hdr][hdr1][pix1][hdr2][pix2]... NOT all
+    // headers first then all payloads (noVNC reads them interleaved -> desync
+    // once numRects >= 2).
+    const msg = Buffer.alloc(4);
+    msg[0] = 0; // FramebufferUpdate
+    msg[1] = 0;
+    msg.writeUInt16BE(rs.length, 2);
+    const parts = [msg];
     for (const r of rs) {
       const W = Math.min(r.w, w - r.x);
       const H = Math.min(r.h, h - r.y);
-      header.writeUInt16BE(r.x, off);
-      header.writeUInt16BE(r.y, off + 2);
-      header.writeUInt16BE(W, off + 4);
-      header.writeUInt16BE(H, off + 6);
-      header.writeUInt32BE(0, off + 8); // Raw encoding
-      off += 12;
-      payload.push(convertRect(fb, r.x, r.y, W, H));
+      const rh = Buffer.alloc(12);
+      rh.writeUInt16BE(r.x, 0);
+      rh.writeUInt16BE(r.y, 2);
+      rh.writeUInt16BE(W, 4);
+      rh.writeUInt16BE(H, 6);
+      rh.writeUInt32BE(0, 8); // Raw encoding
+      const conv = convertRect(fb, r.x, r.y, W, H);
+      vdbg(`rect(W=${W},H=${H}) convLen=${conv.length} expected=${W*H*Math.max(1,Math.round((clientFmt||DEFAULT_FMT).bpp/8))}`);
+      parts.push(rh, conv);
     }
-    if (Date.now() - (sendUpdate._last || 0) > 2000) {
-      sendUpdate._last = Date.now();
-      let nz = 0; const s = fb.pix || new Uint32Array(0);
-      for (let i = 0; i < Math.min(s.length, 300000); i++) if (s[i] !== 0) nz++;
-      let bsum = 0; const r0 = rs[0];
-      if (r0) { const c = convertRect(fb, r0.x, r0.y, Math.min(r0.w, 8), Math.min(r0.h, 8)); for (let j = 0; j < c.length; j++) bsum += c[j]; }
-      console.log(`[vnc] rects=${rs.length} fbNonZero=${nz} conv8x8bytesum=${bsum} bpp=${fb.bpp}`);
-    }
-    write(Buffer.concat([header, ...payload]));
+    const composed = Buffer.concat(parts);
+    vdbg(`composed len=${composed.length}`);
+    write(composed);
   }
 
   const DEFAULT_FMT = { bpp: 32, depth: 24, bigEndian: 0, trueColor: 1, redMax: 255, greenMax: 255, blueMax: 255, redShift: 16, greenShift: 8, blueShift: 0 };
@@ -112,6 +187,25 @@ export function attachVnc(ws, sess) {
     const redMax = fmt.redMax || 255, greenMax = fmt.greenMax || 255, blueMax = fmt.blueMax || 255;
     const rs = fmt.redShift || 0, gs = fmt.greenShift || 0, bs = fmt.blueShift || 0;
     const big = !!fmt.bigEndian;
+    // Fast path: 32bpp little-endian full-range RGB with shifts 16/8/0. pix is
+    // a Uint32Array of 0x00RRGGBB; on LE hosts its bytes already ARE B,G,R,0,
+    // so blit rows without touching individual pixels.
+    if (pix && bpp >= 24 && !big && redMax === 255 && greenMax === 255 && blueMax === 255
+        && rs === 16 && gs === 8 && bs === 0) {
+      const src = Buffer.from(pix.buffer, pix.byteOffset, pix.byteLength);
+      for (let yy = 0; yy < H; yy++) {
+        const rowStart = ((y + yy) * w + x) * 4;
+        src.copy(out, yy * W * 4, rowStart, rowStart + W * 4);
+        if (bppB === 3) {
+          // squeeze 4-byte pixels to 3 bytes each
+          for (let xx = W - 1; xx >= 0; xx--) {
+            const s = yy * W * 4 + xx * 4, d = yy * W * 3 + xx * 3;
+            out[d] = out[s]; out[d + 1] = out[s + 1]; out[d + 2] = out[s + 2];
+          }
+        }
+      }
+      return out;
+    }
     let o = 0;
     for (let yy = 0; yy < H; yy++) {
       let i = (y + yy) * w + x;
@@ -195,7 +289,16 @@ export function attachVnc(ws, sess) {
         redShift: p[14], greenShift: p[15], blueShift: p[16] };
     } else if (t === 2) { // SetEncodings — ignore (raw only)
     } else if (t === 3) { // FramebufferUpdateRequest
-      sendUpdate(null); // send whole screen
+      const incremental = p[1] !== 0;
+      if (incremental) {
+        // Push-driven: a full screen is sent only when the socket drained and is
+        // marked stale; otherwise this re-arm request is a no-op.
+        scheduleFlush();
+      } else {
+        pendingRects = null;
+        pendingFull = true;
+        scheduleFlush();
+      }
     } else if (t === 4) {
       onKeyEvent(p);
     } else if (t === 5) {
@@ -244,14 +347,19 @@ export function attachVnc(ws, sess) {
         else if (t === 0) need = 20; // SetPixelFormat
         else if (t === 2) need = 4 + buf.readUInt16BE(2) * 4; // SetEncodings: type,pad,nenc(u16),nenc*4
         if (buf.length < need) return;
+        if (process.env.VNC_DBG === '1') {
+          if (t === 4) vdbg(`in keyEvent down=${buf[1]} keysym=0x${buf.readUInt32BE(4).toString(16)}`);
+          else if (t === 3) vdbg(`in fbuReq inc=${buf[1]} x=${buf.readUInt16BE(2)} y=${buf.readUInt16BE(4)} w=${buf.readUInt16BE(6)} h=${buf.readUInt16BE(8)}`);
+          else vdbg(`in msg t=${t} len=${need}`);
+        }
         onClientMessage(buf.slice(0, need));
         buf = buf.slice(need);
       }
     } catch { fail('decode error'); }
   });
 
-  ws.on('close', () => atexit());
-  ws.on('error', () => atexit());
+  ws.on('close', (code, reason) => { vdbg(`ws close code=${code} reason=${String(reason)} lastSent=${_lastSent.len}B first=${_lastSent.secondHex}`); atexit(); });
+  ws.on('error', (e) => { vdbg(`ws error ${e && e.message || e}`); atexit(); });
 
   write(RFB);
   ws.on('pong', () => {});

@@ -32,6 +32,10 @@ export class IrmcFramebuffer {
     this.isText = false;
     this.special4bpp = false;
     this._dirty = [];
+    // cached 8bpp palette expansion + invalidation counter
+    this._rgb = null;
+    this.paletteVer = 0;
+    this._paletteVer = -1;
   }
 
   setVesaMode(mode, bpp, w, h) {
@@ -56,6 +60,7 @@ export class IrmcFramebuffer {
 
   setPalette(paletteArray, paletteSize) {
     for (let i = 0; i < paletteSize && i < 256; i++) this.palette[i] = paletteArray[i] >>> 0;
+    this.paletteVer++; // invalidate the 8bpp palette-expansion cache
   }
 
   dirtyPush(r) {
@@ -68,14 +73,32 @@ export class IrmcFramebuffer {
   }
 
   // Render the current buffer into a flat 32bpp RGB array (naturally 0xRRGGBB).
-  getRGB() {
-    // If in an 8bpp palette screen, expand indices.
-    if (this.bpp === 8) {
-      const out = new Uint32Array(this.pix.length);
-      for (let i = 0; i < this.idx.length; i++) out[i] = this.palette[this.idx[i]] >>> 0;
-      return out;
+  getRGB() { return this.getRGBFor(null); }
+
+  // Like getRGB() but expands only the given rects from the 8bpp palette index
+  // buffer, returning a persistent cached array (no allocation per update).
+  getRGBFor(rects) {
+    if (this.bpp !== 8) return this.pix;
+    if (this.paletteVer !== this._paletteVer) {
+      this._paletteVer = this.paletteVer;
+      this._rgb = null;
     }
-    return this.pix;
+    if (!this._rgb || this._rgb.length !== this.idx.length) this._rgb = new Uint32Array(this.idx.length);
+    const rgb = this._rgb;
+    const w = this.width;
+    if (!rects || !rects.length) {
+      for (let i = 0; i < this.idx.length; i++) rgb[i] = this.palette[this.idx[i]] >>> 0;
+      return rgb;
+    }
+    for (const r of rects) {
+      const x0 = Math.max(0, r.x), y0 = Math.max(0, r.y);
+      const x1 = Math.min(this.width, r.x + r.w), y1 = Math.min(this.height, r.y + r.h);
+      for (let y = y0; y < y1; y++) {
+        let p = y * w + x0;
+        for (let x = x0; x < x1; x++, p++) rgb[p] = this.palette[this.idx[p]] >>> 0;
+      }
+    }
+    return rgb;
   }
 
   // ---- bitBlt (226) ---------------------------------------------------------

@@ -11,6 +11,9 @@ LLM Wiki проекта iRMC Viewer (этап 1). Страницы в `wiki/`, �
   декодирование видео: фреймбуфер, bpp, палитра, таильный кодек, RLE, BSE/SSP.
 - [knowledge/project-status.md](knowledge/project-status.md) — проект: решения,
   модули, этап 1, проверено/открыто, следующие шаги.
+- [knowledge/console-performance.md](knowledge/console-performance.md) —
+  производительность bridge→noVNC: backpressure, incremental, коалесцинг,
+  избежание лага ввода (диагноз + фикс 2026-09-04).
 
 ## Хронология
 
