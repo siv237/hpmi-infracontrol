@@ -1,0 +1,248 @@
+## [2026-09-03] ingest | avr_irmc_s2.jar: декомпиляция протокола iRMC AVR
+Декомпилирован бейн-код `raw/avr_irmc_s2.jar` (CFR 0.152, 216 классов).
+Разобраны: транспорт, рукопожатие (сигнатуры, конфиг-маска), таблицы команд
+сервер→клиент и клиент→сервер, видео-декодер (BitBlt/EnhanceBitBlt/BSE,
+RLE triplet/repeat, палитра, bpp). Созданы страницы `irmc-protocol.md`,
+`irmc-video-decoding.md`, `project-status.md`.
+
+## [2026-09-03] ingest | Классы CConn / MessageReceiverThread / MessageSender
+Уточнён поток соединения и исходящие команды (кнопки/мышь/клавиатура/питание).
+Подтверждено: standalone `0x12121212`, embedded `0x5A5A5A5A` (httpdata),
+digest `0x13131313`. Порт по умолчанию 80/443.
+
+## [2026-09-03] project | Этап 1 — проверка подключения
+Реализованы `server/irmc.js` (клиент протокола + `testIrmc`),
+`server/irmc-decode.js` (декодер), `server/index.js` (HTTP, `/api/test`),
+`web/index.html` (форма адрес/логин/пароль). Порт по умолчанию 1845.
+Wiki переведена на каноны LLM Wiki (AGENTS.md, index.md, log.md).
+
+## [2026-09-03] project | Хранилище серверов + шифрование + TLS
+- Добавлен `server/store.js`: сервера с creds в AES-256-GCM (ключ `data/key.bin`,
+  права 600). API `/api/servers` (GET/POST/DELETE), `/api/test` поддерживает
+  `{serverId}` для теста сохранённого.
+- TLS-фоллбэк для старых прошивок (`permissiveTls` → TLSv1, `@SECLEVEL=0`,
+  SHA1-подписи, затем plaintext).
+- Тема веб-страницы адаптивная (светлая по умолчанию, тёмная по
+  `prefers-color-scheme`).
+- Проверено: сохранение/список/удаление, маскировка пароля в списке,
+  тест сохранённого сервера (ECONNREFUSED), ключ и база с правами 600.
+
+## [2026-09-03] ingest | Реальный iRMC: HTTP/Digest, HashMap-профиль
+Подключено к PRIMERGY RX300 S6 (ServerView iRMC S2 Web Server). Выяснено:
+веб — только HTTP:80, HTTPS:443 вешает сервер; авторизация веб — HTTP Digest
+(realm "iRMC S2@iRMC-P1-NODE1", qop=auth). Digest-логин извне виснет (и свой
+код, и curl --digest) — вероятно, сессия/куки/одноразовый nonce, требует
+разбора. Пароль содержит не-ASCII (учёт UTF-8 для digest HA1).
+Добавлен `server/probe.js` + `/api/info` (быстрый опрос, только HTTP),
+/`api/discover`,`/api/test` отложены. Основной сценарий — данные сервера
+(/api/info), экран — следующий этап после решения логина.
+
+## [2026-09-03] ingest | JNLP + HTTP Digest-логин
+- В файле `avr.jnlp` (из веб-консоли) — параметры апплета: `-ipaddress`,
+  `-sessiontype=kvm`, `-httpdata=<per-session>`, `-digest`, `-HttpPort=80`,
+  `-HttpsPort=443`, `-VncPort=80`, `-StoragePort=5901`, `jarname=avr_iRMC_S2.jar`.
+- HTTP Digest работает: `digestGet()` по `realm="iRMC S2@iRMC-P1-NODE1",
+  qop=auth`; пароль **обязан** быть в латинице (кириллица → 401). После логина
+  на главной ссылка `avr.jnlp?ms=0&lang=0&sid=<sid>` отдаёт свежий `httpdata`.
+- ⚠ Открытый: только 80/443 (5901–5904 закрыты вне сессии). Прямое raw
+  подключение AVR на 80 с embedded-рукожатием (httpdata) ответа не даёт
+  (проверено NOP+HS / HS-only / задержкой, 25с). Похоже, AVR-порт не равен
+  80/JNLP-значению либо требуются сессия/туннель. Требуется факт. порт из
+  трассировки апплета (`ss -tnp | grep java` / `netstat`).
+- Добавлен `server/probe.js` (/api/info), обновление сервера (PUT),
+  подсветка: HTTP-only, не трогать 443.
+
+## [2026-09-03] ingest | Референс cryan209/irmc-live-viewer + СВЯЗЬ УСТАНОВЛЕНА
+Найден референс `cryan209/irmc-live-viewer` (HTML5/Node KVM replacement для
+Fujitsu iRMC / Mahogany AVR). По `docs/protocol.md` и `server.js` исправлены
+ключевые баги моего клиента:
+- `ClientNOP` = **0xD2 + 7 байт (итого 8)**.
+- `ClientHandshake` длины **u32le** + padding 48/48/228, config 0x1f последним.
+- Стартовую пачку (0xdd,0xf7,0xf3,0xd3,0xf2) слать **после** `ServerHandshake`.
+- НЕ слать `0xf1 RequestVesaMode`; `Invalidate` — left,top,right,bottom (2048×2048).
+- Добавлен обработчик `0x89 StorageStatus` (1056 байт) — устранил десинк.
+- HTTP-only, port 80 из per-session JNLP (свежий `httpdata` через digest).
+
+## [2026-09-03] check | Рукопожатие и видеорежим с реального iRMC S2
+`/api/test` (serverId) теперь: digest-логин → свежий httpdata → connect :80 →
+`ClientNOP` → `ServerHandshake "MAHOGANY KVMS LBW"` → `ClientHandshake` →
+`FirmwareVersion "iRMC S2 Firmware 5.76A"` → `MultiUserState` → `StorageStatus`
+→ **`InformVesaMode 1024x768@32bpp`**. Соединение установлено, экран получен.
+(Уч. пароль — только латиница; кириллица → 401.)
+
+## [2026-09-03] project | UI (2 панели) + RFB/WebSocket мост (noVNC)
+- Новая веб-страница: слева панель серверов (добавить/удалить/выбрать), справа —
+  детали из веб-интерфейса (`/api/info`) + кнопка «Запустить консоль (noVNC)».
+- `server/vnc.js`: RFB 3.8 сервер по WebSocket (`SecurityNone`, raw-кодирование),
+  мост кадров iRMC → noVNC; ввод (KeyEvent/PointerEvent) → `IrmcClient`.
+- Сценарий: `/api/connect` (serverId) → digest-логин (с ретраями) → свежий
+  `httpdata` → `IrmcClient` → RFB-сессия (`/vnc?token=`) → canvas-клиент.
+- Одна активная консоль на хост (`sessionsByHost`), очистка старых сессий.
+  НЕ кэшировать `httpdata` (протухает → AVR дропает видео после рукопожатия).
+- ⚠ Консоль iRMC S2, похоже, **односессионная**: повторные подключения могут
+  оставлять «зависшую» сессию на стороне iRMC, блокируя новую выдачу видео
+  (state=starting без vesa). Требуется разблокировка/сброс консоли на iRMC.
+
+## [2026-09-03] fix | Видео пошло; инвентарь из веб-страницы
+- Убраны лишние стартовые команды `0xb1/0xb2/0xf6` (Force8bpp может
+  останавливать поток) → `InformVesaMode` теперь приходит (state live 1024×768).
+- RFB-мост проверен: `SERVERINIT 1024x768` + `FramebufferUpdate` (кадр ~3 МБ).
+- `/api/info` теперь делает digest-логин и парсит авторизованную страницу
+  (`parseInventory`): модель/шасси/серийник/BIOS/GUID/имя/ОС/IP/asset tag/LED.
+  Реальный инвентарь: **PRIMERGY RX300 S6**, RX300S6R1, YL6T040684,
+  R1.13.2619.N1, irmc-dgk10str011, proxmox.
+
+## [2026-09-03] check | Консоль в браузере — ЖИВАЯ
+Браузер показал живой экран (canvas, `Экран 1024×768`) + полный инвентарь из
+вебки. Исправлен бесконечный цикл в RFB-клиенте (`const b=this.buf` внутри
+`while` → перечитывание буфера), убран зависший Firefox. Не доделано:
+**видео-декод** — кадр выводится с вертикальными красно-зелёными полосами
+(неверный HLC-путь 498: порядок каналов B/G/R и snoop-map). Дальше — сверить
+`irmc-decode.js` с эталонным `irmc-decode-mahogany.js` (cryan209, подтверждён
+на iRMC S3/S2).
+
+## [2026-09-03] fix | HLC-декодер (498) + фиксированный экран
+- HLC `enhanceBitBltHLC` приведён к эталону (server.js applyEnhanceHLC):
+  заголовок = **3×u32 (blueLen, greenLen, резерв), данные с +12**; потоки —
+  blue@+12, green@+12+blueLen, **red (bpp>16) без длины, до конца данных**;
+  пиксель = `(red<<16)|(green<<8)|blue`. Ранее смещения были неверны →
+  вертикальные красно-зелёные полосы.
+- RLE-ридер — stateful (remaining/value), как `rleReader` эталона.
+- noVNC-экран: фиксированный контейнер `#cvwrap` (aspect-ratio), канвас
+  автомасштабируется (`max-width/height:100%`, `image-rendering:pixelated`).
+
+## [2026-09-03] check | ДЕКОДЕР ПОДТВЕРЖДЁН — чистая консоль
+Снят фреймбуфер в PNG (харнесс): **живая консоль Proxmox** — системный лог
+загрузки, зелёные `[ OK ]`, красные `[FAILED]`, текст чёткий, цвета верные, без
+полос. HLC-декодер (498) корректен. Макет переделан на 3 колонки: серверы |
+экран (крупный, фикс.) | данные (справа), без вертикального скролла страницы.
+`/api/connect` теперь всегда закрывает старую сессию и открывает свежую
+(консоль односессионная) — устраняет «Соединение закрыто».
+
+## [2026-09-04] feat | Реальный noVNC + подтверждение экрана
+- Интегрирован **настоящий noVNC** (v1.5.0, `web/novnc/`) со штатной
+  боковой/всплывающей панелью. RFB-сервер (`server/vnc.js`) отдаёт поток,
+  `wss.handleProtocols` согласует subprotocol **`binary`** (noVNC требует его
+  для Security None).
+- Статик `/novnc/*` (vnc.html, app/, core/, vendor/), фоллбэк — только для
+  путей без расширения, иначе 404 (чтобы не ломать ES-модули).
+- Кнопка «Запустить консоль» → сессия → `window.open(/novnc/vnc.html?host&port&path=vnc?token=<t>&resize=remote&autoscale=1&reconnect=1)`.
+- Подтверждено в Chromium: noVNC «Подключено (без шифрования) к iRMC AVR»,
+  canvas NZ=71102 — консоль видна. Скриншот: `screenshots/novnc_ui_<ts>.png`.
+- Также добавлены: кнопка «Снимок» и автообновление кадра (`/api/snapshot`,
+  серверный декод) + `server/png.js` (PNG-энкодер), скриншоты в `screenshots/`.
+- ⚠ Односессионная консоль: не открывать две консоли одновременно.
+
+## [2026-09-04] fix | noVNC чисто (по аналогии с fwab)
+Изучен референс `fwab` (src/webmon.py): там noVNC встраивается в iframe
+(`.vncwrap`, overflow hidden) с `autoconnect=1&resize=remote&view_only`.
+- **Причина «двоения/ошмётков» — `resize=scale`** (noVNC масштабировал кадр в
+  высоком контейнере). Переключено на **`resize=remote`** — нативный кадр,
+  изображение чистое (скриншоты clean).
+- noVNC теперь в **iframe внутри нашей страницы**, `autoconnect=1` (без клика
+  Connect), `reconnect=1`.
+- `server/vnc.js`: добавлен учёт `SetPixelFormat` клиента (конвертация под
+  запрошенный формат bpp/shifts/endian) + субпротокол `binary`.
+- Скриншоты: `screenshots/final_<ts>.png` (встроенный noVNC + панель),
+  `novnc_remote_<ts>.png` (доказательство, что remote → без двоения).
+
+## [2026-09-04] fix | Чистое встраивание noVNC (панель скрыта)
+Плавающая панель noVNC в маленьком iframe распахивалась и полупрозрачно
+лезла поверх консоли → выглядело «без стилей/сломанной». Создан
+`web/novnc/vnc_embed.html` (vnc.html + CSS: `#noVNC_control_bar_anchor`,
+`.noVNC_control_bar`, `#noVNC_status_bar` → display:none; контейнер на весь
+блок). iframe нашей страницы теперь использует `vnc_embed.html` +
+`autoconnect=1&resize=remote`. Консоль чистая, во весь блок; ввод
+(клавиатура/мышь) идёт через RFB-клиент по канвасу. Скриншот:
+`screenshots/embed_clean_<ts>.png`.
+
+## [2026-09-04] fix | Сломанные иконки меню noVNC (content-type)
+Меню/панель noVNC (кнопки «Буфер обмена», «Full screen», «Настройки»,
+«Отключение», «Подключение» и др.) показывали **битые значки-заглушки**.
+Причина: статик-хендлер `/novnc/*` в `server/index.js` мапил только
+`.html/.js/.css/.json`, а все ресурсы без типа отдавал как
+`application/octet-stream`. Chromium отказывался растеризовать **SVG** под
+таким content-type → `naturalWidth:0` → иконка-заглушка. Добавлен решатель
+`mimeFor()` (карта `MIME`: `.svg→image/svg+xml`, `.ico→image/x-icon`,
+`.png/.woff/.woff2/.ttf/.mp3/.ogg/.oga` и др.) и применён в `/novnc/*`.
+Проверено headless Chromium: `naturalWidth` иконок `0 → 25`, ошибок нет,
+значки отрисованы. (Отдельно: `defaults.json`/`mandatory.json` не существуют в
+сборке — noVNC логирует 404, но это не ломает меню, фоллбэк на дефолты.)
+
+## [2026-09-04] fix | Клавиатура не работала (offset + keysym→HID)
+Клавиатура в консоли не работала. Причин две, обе в `server/vnc.js`:
+- **Неверные смещения в RFB-парсере.** `onKeyEvent`/`onPointerEvent` читали
+  флаг/маску из `p[0]` — а это байт **типа сообщения** (`4`/`5`, всегда
+  ненулевой). Правильно: `p[1]` (KeyEvent `[4][down][pad,pad][keysym u32]`,
+  PointerEvent `[5][mask][x u16][y u16]`). Из-за этого key-up не отправлялся
+  (всегда down) и маска кнопок мыши была неверной.
+- **keysym вместо USB HID.** iRMC `0xd1` ждёт **HID usage-код** (u16le), а noVNC
+  шлёт по RFB X11 **keysym** (напр. `a`=`0x61`, `Enter`=`0xff0d`). Добавлена
+  карта `KEYSYM_TO_HID` (по эталону cryan209: `a`→4, `Enter`→40, `lctrl`→224 и
+  т.д.). Shift/alt/ctrl приходят **отдельными** событиями-модификаторами, поэтому
+  верхний регистр/символы мапятся на БАЗОВЫЙ (нешифтованный) ключ.
+Проверено: `node --check` ОК, юнит-прогон чтения байтов (a-down/up, Enter,
+базовый `A`, left/right click) — все совпадения; noVNC грузится без ошибок.
+Остаются только безобидные 404 `defaults.json`/`mandatory.json`/`package.json`
+(noVNC перехватывает и использует дефолты).
+
+## [2026-09-04] fix | start.sh: автозавершение старого инстанса
+`./start.sh` падал с `EADDRINUSE`, если порт уже занят (второй терминал /
+зависший процесс). Скрипт теперь перед запуском проверяет
+`ss -ltn` на `:PORT` и, если занято, убивает процесс через `fuser -k PORT/tcp`.
+Проверено: запущен фоновый инстанс → `./start.sh` сам его завершил и поднялся
+на том же порту, без ошибок.
+
+## [2026-09-04] check | Консоль отображается корректно (100×нет артефактов)
+После фиксов (односессионная консоль + content-type + клавиатура) повторный
+прогон: `/api/connect` → сессия `live 1024×768@32`, `fbNonZero≈21-36k`;
+снапшот `/api/snapshot` декодируется — кадр реальный (консоль, текст/графика
+парсятся). Вручную проверено пользователем: экран правильный. Осталось в
+исходнике Java (апплет): на каждый серверный `SequenceNumber (0xef)` апплет
+отвечает `0xef` пакетом (CConn.onSequenceNumber → MessageSender.sequenceNumber)
+— наш парсер пока только читает sequence без ack; при возможных затуханиях
+потока добавить ack (как BSE/SSP-кадры с sequence).
+
+## [2026-09-04] fix | Чёрный экран консоли — зависшая односессионная консоль
+Симптом: noVNC подключается, но экран чёрный. Диагностика по `/api/session`:
+сессия вечно `state=starting`, `width=0 height=0`, `=0` пикселей; в статусе
+`unknown-cmd:0` (поток Padding `0x00`), до `InformVesaMode (0xe1)` не доходит.
+Причина (известная, задокументированная в логе): консоль iRMC S2
+**односессионная**. Когда предыдущая сессия закрывалась без чистого
+`ClientDisconnect`, iRMC продолжала держать primary control → следующее
+подключение получало handshake + firmware, но НЕ видеопоток (без `0xe1`).
+- **`server/irmc.js close()`**: теперь перед закрытием сокета шлёт
+  `0xd8 ClientDisconnect` + `u32le(1)` (как эталон cryan209), чтобы iRMC
+  отпустила консоль.
+- **`server/index.js` `/api/connect`**: залипшую сессию `starting` (>8с, без
+  видеорежима) теперь считаем протухшей → `closeSession()` (с `0xd8`) и
+  пере opened свежая консоль (раньше она REUSE'илась и ждала вечно).
+- Проверено: после фикса сессия доходит до `live 1024x768`, `fbNonZero≈36k`,
+  кадры `0xe3 type 498 (HLC)` декодируются, экран стабилен. Замечание: iRMC
+  отдаёт видео с задержкой (~20-30с), пока старая сессия не отпустит консоль —
+  первый connect может быть «starting», ждать, затем live.
+
+## [2026-09-04] fix | Стабильность видеопотока: SequenceAck + SetEncodings
+Сверка с Java-исходником (PixelBufferImage / MessageReceiverThread / LittleEndianBufferMgr):
+- **`0xef SequenceNumber` — обязателен ответ-ack.** Апплет на каждый серверный
+  `0xef` (3 reserved + u32 seq, LE) отвечает тем же пакетом
+  (CConn.onSequenceNumber → MessageSender.sequenceNumber, writeBuffer:
+  reserved+int LE). Наш клиент только читал → после ввода (рост числа кадров)
+  поток мог вставать («фиолетовый экран, нет динамики»). Теперь отвечаем
+  `sendCmd(0xef)` + reserved + seq LE.
+- **SetEncodings (тип 2) в RFB-парсере не учитывался** → `need` оставался 4,
+  noVNC-сообщение обрезалось → рассинхронизация потока. Фикс:
+  `need = 4 + nenc*4` (nenc = u16 на смещении 2).
+- Проверено по Java: порядок каналов HLC (blue→green→red потоки, пиксель
+  `red<<16|green<<8|blue`), заголовок 12 байт при bpp>8 (совпадает с нашим
+  декодером; у Java при bpp<=16 redLen не читается, но offset всё равно 12 —
+  n30+=4 только при bpp>16 — у нас blueOff=12 всегда, greenOff=12+blueLen —
+  для 32bpp идентично), standbyPower (зануление + инвалидейт) — совпадает.
+- **Обрезка экрана снизу**: `#cvwrap` с жёстким `aspect-ratio:4/3` выталкивал
+  контейнер за пределы `#screen` (main overflow:hidden) → низ резался. Фикс:
+  `flex:1; min-height:0` вместо aspect-ratio — контейнер занимает доступное
+  место, noVNC (`resize=remote`) вписывает канвас целиком. Проверено headless:
+  overflowBy=-31px, тёмная область консоли x309-1041 y135-861 при 1400×900 —
+  ничего не обрезано.
+- Скриншоты переведены на `<unixtime>_<label>.png` (сортировка по числу =
+  хронология), старая каша удалена.

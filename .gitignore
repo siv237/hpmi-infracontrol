@@ -1,0 +1,21 @@
+# deps
+node_modules/
+
+# private runtime data: AES key + stored servers with credentials
+data/
+
+# runtime screenshots
+screenshots/
+
+# OS noise
+.DS_Store
+Thumbs.db
+*.log
+
+# reference binaries (GPL viewer from the iRMC web ui) — too big for git
+raw/*.jar
+avr_irmc_s2*.jar
+*.jar
+
+# env
+.env

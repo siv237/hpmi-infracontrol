@@ -1,0 +1,258 @@
+// Minimal RFB 3.8 server over WebSocket, bridging the live iRMC AVR stream
+// (IrmcClient framebuffer) to a browser VNC client (noVNC-style, canvas).
+// Security: none (the WebSocket endpoint is authenticated by session token),
+// raw encoding only. Keyboard/mouse events are forwarded to the iRMC.
+
+const RFB = Buffer.from('RFB 003.008\n', 'ascii');
+
+// iRMC 0xd1 KeyStateChange wants a USB HID usage code (u16le). noVNC instead
+// sends X11 keysyms over RFB (e.g. 'a'=0x61, Enter=0xff0d). Shift/alt/ctrl
+// arrive as *separate* modifier keysym events, so here each keysym maps to its
+// BASE (unshifted) HID code and the modifier state is driven by those events.
+const KEYSYM_TO_HID = {
+  // letters (both cases -> base key)
+  0x61: 4, 0x62: 5, 0x63: 6, 0x64: 7, 0x65: 8, 0x66: 9, 0x67: 10, 0x68: 11,
+  0x69: 12, 0x6a: 13, 0x6b: 14, 0x6c: 15, 0x6d: 16, 0x6e: 17, 0x6f: 18, 0x70: 19,
+  0x71: 20, 0x72: 21, 0x73: 22, 0x74: 23, 0x75: 24, 0x76: 25, 0x77: 26, 0x78: 27,
+  0x79: 28, 0x7a: 29,
+  0x41: 4, 0x42: 5, 0x43: 6, 0x44: 7, 0x45: 8, 0x46: 9, 0x47: 10, 0x48: 11,
+  0x49: 12, 0x4a: 13, 0x4b: 14, 0x4c: 15, 0x4d: 16, 0x4e: 17, 0x4f: 18, 0x50: 19,
+  0x51: 20, 0x52: 21, 0x53: 22, 0x54: 23, 0x55: 24, 0x56: 25, 0x57: 26, 0x58: 27,
+  0x59: 28, 0x5a: 29,
+  0x20: 44, // space
+  0x30: 39, 0x31: 30, 0x32: 31, 0x33: 32, 0x34: 33, 0x35: 34,
+  0x36: 35, 0x37: 36, 0x38: 37, 0x39: 38,
+  // unshifted punctuation
+  0x2d: 45, 0x3d: 46, 0x5b: 47, 0x5d: 48, 0x5c: 49, 0x3b: 51,
+  0x27: 52, 0x60: 53, 0x2c: 54, 0x2e: 55, 0x2f: 56,
+  // shifted punctuation -> base key (shift handled by modifier events)
+  0x21: 30, 0x40: 31, 0x23: 32, 0x24: 33, 0x25: 34, 0x5e: 35,
+  0x26: 36, 0x2a: 37, 0x28: 38, 0x29: 39, 0x5f: 45, 0x2b: 46,
+  0x7b: 47, 0x7d: 48, 0x7c: 49, 0x3a: 51, 0x22: 52, 0x7e: 53,
+  0x3c: 54, 0x3e: 55, 0x3f: 56,
+  // specials / navigation
+  0xff08: 42, 0xff09: 43, 0xff0d: 40, 0xff1b: 41, 0x7f: 42, 0xffff: 76,
+  0xff50: 74, 0xff57: 77, 0xff55: 75, 0xff56: 78, 0xff63: 73,
+  0xff51: 80, 0xff52: 82, 0xff53: 79, 0xff54: 81,
+  0xff61: 70, 0xff13: 72, 0xff14: 71, 0xff7f: 83, 0xffe5: 57,
+  0xff8d: 40, // KP_Enter
+  // function keys
+  0xffbe: 58, 0xffbf: 59, 0xffc0: 60, 0xffc1: 61, 0xffc2: 62, 0xffc3: 63,
+  0xffc4: 64, 0xffc5: 65, 0xffc6: 66, 0xffc7: 67, 0xffc8: 68, 0xffc9: 69,
+  // modifiers (sent as their own events)
+  0xffe1: 225, 0xffe2: 229, 0xffe3: 224, 0xffe4: 228,
+  0xffe9: 226, 0xffea: 230, 0xffeb: 227, 0xffec: 231,
+};
+
+export function attachVnc(ws, sess) {
+  // sess: { fb(), subscribe(cb), unsubscribe(cb), key(scancode,down), mouseMove(x,y), buttonState(x,y,mask), onClose() }
+  const write = (b) => { if (ws.readyState === 1) ws.send(b); };
+
+  let buf = Buffer.alloc(0);
+  let phase = 'version';
+  let clientFmt = null; // {bpp, redShift, greenShift, blueShift, redMax, greenMax, blueMax}
+  let keepalive = null;
+
+  const frameCb = (rects) => {
+    if (phase !== 'ready') return;
+    sendUpdate(rects);
+  };
+
+  function fail(msg) { try { ws.close(1002, msg); } catch {} atexit(); }
+
+  function atexit() { if (keepalive) clearInterval(keepalive); sess.unsubscribe(frameCb); }
+
+  function sendUpdate(rects) {
+    const fb = sess.fb();
+    const { width, height, pix } = fb;
+    // Validate rects
+    const rs = (rects && rects.length ? rects : [{ x: 0, y: 0, w: width, h: height }])
+      .filter((r) => r.w > 0 && r.h > 0 && r.x >= 0 && r.y >= 0 && r.x < width && r.y < height)
+      .slice(0, 64);
+    if (!rs.length) return;
+    const w = fb.width, h = fb.height;
+    const header = Buffer.alloc(4 + rs.length * 12);
+    header[0] = 0; // FramebufferUpdate
+    header[1] = 0;
+    header.writeUInt16BE(rs.length, 2);
+    let off = 4;
+    let payload = [];
+    for (const r of rs) {
+      const W = Math.min(r.w, w - r.x);
+      const H = Math.min(r.h, h - r.y);
+      header.writeUInt16BE(r.x, off);
+      header.writeUInt16BE(r.y, off + 2);
+      header.writeUInt16BE(W, off + 4);
+      header.writeUInt16BE(H, off + 6);
+      header.writeUInt32BE(0, off + 8); // Raw encoding
+      off += 12;
+      payload.push(convertRect(fb, r.x, r.y, W, H));
+    }
+    if (Date.now() - (sendUpdate._last || 0) > 2000) {
+      sendUpdate._last = Date.now();
+      let nz = 0; const s = fb.pix || new Uint32Array(0);
+      for (let i = 0; i < Math.min(s.length, 300000); i++) if (s[i] !== 0) nz++;
+      let bsum = 0; const r0 = rs[0];
+      if (r0) { const c = convertRect(fb, r0.x, r0.y, Math.min(r0.w, 8), Math.min(r0.h, 8)); for (let j = 0; j < c.length; j++) bsum += c[j]; }
+      console.log(`[vnc] rects=${rs.length} fbNonZero=${nz} conv8x8bytesum=${bsum} bpp=${fb.bpp}`);
+    }
+    write(Buffer.concat([header, ...payload]));
+  }
+
+  const DEFAULT_FMT = { bpp: 32, depth: 24, bigEndian: 0, trueColor: 1, redMax: 255, greenMax: 255, blueMax: 255, redShift: 16, greenShift: 8, blueShift: 0 };
+
+  // Honour the client's SetPixelFormat (noVNC requests its own format); if we
+  // ignore it and force 32bpp, noVNC misreads the byte stream -> garbled image.
+  function convertRect(fb, x, y, W, H) {
+    const fmt = clientFmt || DEFAULT_FMT;
+    const bpp = fmt.bpp || 32;
+    const bppB = Math.max(1, Math.round(bpp / 8));
+    const out = Buffer.alloc(W * H * bppB);
+    const pix = fb.pix, w = fb.width;
+    const redMax = fmt.redMax || 255, greenMax = fmt.greenMax || 255, blueMax = fmt.blueMax || 255;
+    const rs = fmt.redShift || 0, gs = fmt.greenShift || 0, bs = fmt.blueShift || 0;
+    const big = !!fmt.bigEndian;
+    let o = 0;
+    for (let yy = 0; yy < H; yy++) {
+      let i = (y + yy) * w + x;
+      for (let xx = 0; xx < W; xx++) {
+        const v = pix ? pix[i] : 0;
+        const r = (v >>> 16) & 255, g = (v >>> 8) & 255, b = v & 255;
+        const R = Math.round(r * redMax / 255), G = Math.round(g * greenMax / 255), B = Math.round(b * blueMax / 255);
+        if (bpp >= 24) {
+          if (big) { out[o] = R; out[o + 1] = G; out[o + 2] = B; if (bppB === 4) out[o + 3] = 0; }
+          else { out[o] = B; out[o + 1] = G; out[o + 2] = R; if (bppB === 4) out[o + 3] = 0; }
+        } else if (bpp === 16) {
+          const px = (R << rs) | (G << gs) | (B << bs);
+          if (big) { out[o] = (px >> 8) & 0xFF; out[o + 1] = px & 0xFF; }
+          else { out[o] = px & 0xFF; out[o + 1] = (px >> 8) & 0xFF; }
+        } else { // 8bpp truecolor palette-ish: send index as grey
+          const idx = Math.round((r * 0.299 + g * 0.587 + b * 0.114));
+          out[o] = idx;
+        }
+        o += bppB;
+        i++;
+      }
+    }
+    return out;
+  }
+
+  function sendPixelFormat() {
+    // 32bpp depth24 true-color, RGB shifts 16/8/0 (bytes B,G,R,X)
+    const pf = Buffer.alloc(16);
+    pf[0] = 32;            // bits-per-pixel
+    pf[1] = 24;            // depth
+    pf[2] = 0;             // big-endian
+    pf[3] = 1;             // true-color
+    pf.writeUInt16BE(255, 4);   // red max
+    pf.writeUInt16BE(255, 6);   // green max
+    pf.writeUInt16BE(255, 8);   // blue max
+    pf[10] = 16;           // red shift
+    pf[11] = 8;            // green shift
+    pf[12] = 0;            // blue shift
+    const fb = sess.fb();
+    const name = Buffer.from('iRMC AVR', 'latin1');
+    const hdr = Buffer.alloc(4 + 16 + 4 + name.length);
+    hdr.writeUInt16BE(fb.width, 0);
+    hdr.writeUInt16BE(fb.height, 2);
+    pf.copy(hdr, 4);
+    hdr.writeUInt32BE(name.length, 20);
+    name.copy(hdr, 24);
+    write(hdr);
+  }
+
+  function sendSecurityNone() {
+    const s = Buffer.from([1, 1]); // count=1, SecurityNone
+    write(s);
+  }
+
+  // ---- input ------------------------------------------------------------
+  function onKeyEvent(p) {
+    if (p.length < 8) return;
+    // RFB KeyEvent: [type=4][down-flag][pad][pad][keysym(u32)]
+    const down = p[1] !== 0;
+    const keysym = p.readUInt32BE(4);
+    const hid = KEYSYM_TO_HID[keysym];
+    if (hid) sess && sess.key && sess.key(hid, down);
+  }
+  function onPointerEvent(p) {
+    if (p.length < 6) return;
+    // RFB PointerEvent: [type=5][button-mask][x(u16)][y(u16)]
+    const vncMask = p[1]; // VNC: 1=left,2=middle,4=right, 8=wheelup,16=wheeldown
+    const px = p.readUInt16BE(2);
+    const py = p.readUInt16BE(4);
+    // map to iRMC button mask: bit0 left, bit1 right, bit2 middle
+    const mask = ((vncMask & 1) ? 1 : 0) | ((vncMask & 4) ? 2 : 0) | ((vncMask & 2) ? 4 : 0);
+    sess && sess.mouseMove && sess.mouseMove(px, py);
+    sess && sess.buttonState && sess.buttonState(px, py, mask);
+  }
+
+  function onClientMessage(p) {
+    const t = p[0];
+    if (t === 0) { // SetPixelFormat (accept; we always send 32bpp)
+      clientFmt = { bpp: p[4], depth: p[5], bigEndian: p[6], trueColor: p[7],
+        redMax: p.readUInt16BE(8), greenMax: p.readUInt16BE(10), blueMax: p.readUInt16BE(12),
+        redShift: p[14], greenShift: p[15], blueShift: p[16] };
+    } else if (t === 2) { // SetEncodings — ignore (raw only)
+    } else if (t === 3) { // FramebufferUpdateRequest
+      sendUpdate(null); // send whole screen
+    } else if (t === 4) {
+      onKeyEvent(p);
+    } else if (t === 5) {
+      onPointerEvent(p);
+    } else if (t === 6) { // ClientCutText
+    }
+  }
+
+  ws.on('message', (data, isBinary) => {
+    if (!isBinary) return;
+    let chunk = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    buf = Buffer.concat([buf, chunk]);
+    try {
+      if (phase === 'version') {
+        if (buf.length < 12) return;
+        const ver = buf.slice(0, 12).toString('ascii');
+        if (!/^RFB 003\.\d{3}\n$/.test(ver)) return fail('bad version');
+        buf = buf.slice(12);
+        sendSecurityNone();
+        phase = 'security';
+      } else if (phase === 'security') {
+        if (buf.length < 1) return;
+        const sec = buf[0];
+        if (sec !== 1) return fail('security type not supported');
+        buf = buf.slice(1);
+        const ok = Buffer.alloc(4);
+        write(ok); // SecurityResult OK
+        phase = 'clientinit';
+      } else if (phase === 'clientinit') {
+        if (buf.length < 1) return;
+        // shared flag ignored
+        buf = buf.slice(1);
+        sendPixelFormat();
+        phase = 'ready';
+        sess.subscribe(frameCb);
+        sendUpdate(null);   // initial full frame
+      } else if (phase === 'ready') {
+        // message type + length
+        if (buf.length < 4) return;
+        const t = buf[0];
+        let need = 4;
+        if (t === 3) need = 10;      // FBUpdateRequest
+        else if (t === 4) need = 8;  // KeyEvent
+        else if (t === 5) need = 6;  // PointerEvent
+        else if (t === 6) need = 8 + buf.readUInt32BE(4); // ClientCutText
+        else if (t === 0) need = 20; // SetPixelFormat
+        else if (t === 2) need = 4 + buf.readUInt16BE(2) * 4; // SetEncodings: type,pad,nenc(u16),nenc*4
+        if (buf.length < need) return;
+        onClientMessage(buf.slice(0, need));
+        buf = buf.slice(need);
+      }
+    } catch { fail('decode error'); }
+  });
+
+  ws.on('close', () => atexit());
+  ws.on('error', () => atexit());
+
+  write(RFB);
+  ws.on('pong', () => {});
+}

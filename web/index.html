@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>iRMC Viewer</title>
+<style>
+:root{color-scheme:light dark;--bg:#f4f6f9;--card:#fff;--border:#d7dbe3;--fg:#1c2330;--muted:#5a6472;--accent:#2563eb;--sel:#e8eefb;--input:#fff;--ok:#16a34a;--err:#dc2626;--okbg:#ecfdf3;--errbg:#fef2f2}
+@media (prefers-color-scheme:dark){:root{--bg:#12141a;--card:#1b1e28;--border:#2a2f3d;--fg:#e6e9f0;--muted:#8b93a6;--accent:#3b82f6;--sel:#24304a;--input:#12141a;--ok:#22c55e;--err:#ef4444;--okbg:#0f2417;--errbg:#2a1016}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,Segoe UI,Roboto,sans-serif;overflow:hidden}
+header{padding:12px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:14px;flex:none}
+header h1{font-size:17px;margin:0}
+header .sub{color:var(--muted);font-size:12px}
+main{display:flex;gap:14px;padding:14px;height:calc(100vh - 55px);overflow:hidden}
+#sidebar{width:260px;background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:auto;flex:none}
+#screen{flex:1;min-width:0;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;display:flex;flex-direction:column;min-height:0}
+#det{width:310px;flex:none;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 16px;overflow:auto}
+#sidebar h2{font-size:13px;color:var(--muted);margin:12px 14px 6px}
+.sitem{display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border)}
+.sitem:hover{background:var(--sel)}
+.sitem.sel{background:var(--sel);border-left:3px solid var(--accent)}
+.sitem .n{font-weight:600}
+.sitem .m{color:var(--muted);font-size:12px}
+.sitem .del{margin-left:auto;color:var(--err);background:none;border:none;font-size:15px;cursor:pointer}
+#screen .bar{display:flex;align-items:center;gap:12px;margin-bottom:14px;flex:none}
+#screen .bar h3{margin:0;font-size:17px;flex:1}
+h3{margin:0 0 10px}
+.btn{display:inline-block;padding:9px 16px;border:0;border-radius:8px;background:var(--accent);color:#fff;font-size:14px;cursor:pointer}
+.btn.green{background:var(--ok)}
+.btn.sec{background:var(--card);color:var(--fg);border:1px solid var(--border)}
+.btn:disabled{opacity:.6;cursor:default}
+.detail{color:var(--muted);font:13px/1.6 ui-monospace,Monaco,'Courier New',monospace;white-space:pre-wrap;word-break:break-word}
+table.ks{width:100%;border-collapse:collapse;margin-top:6px}
+table.ks td{padding:5px 8px;border-bottom:1px solid var(--border);font:13px/1.4 ui-monospace,monospace}
+table.ks td.k{color:var(--muted);width:150px}
+#info{overflow:auto;margin-top:10px}
+#status{font-size:12px;color:var(--muted)}
+#cvwrap{background:#000;border:1px solid var(--border);border-radius:8px;overflow:hidden;display:flex;justify-content:center;align-items:center;width:100%;flex:1;min-height:0;position:relative}
+#cvwrap .hint{position:absolute;color:#555;font-size:14px;user-select:none}
+#cvwrap.connected .hint{display:none}
+#noviframe{width:100%;height:100%;border:0;display:none}
+#cvwrap.connected #noviframe{display:block}
+canvas{image-rendering:pixelated;max-width:100%;max-height:100%;width:auto;height:auto;display:block}
+.alert{padding:10px 12px;border-radius:8px;margin-top:12px;font-size:13px}
+.ok{background:var(--okbg);border:1px solid var(--ok);color:var(--ok)}
+.err{background:var(--errbg);border:1px solid var(--err);color:var(--err)}
+.tools{display:flex;gap:8px;margin-top:6px;flex-wrap:wrap}
+.tools button{padding:5px 10px;font-size:12px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--fg);cursor:pointer}
+</style>
+</head>
+<body>
+<header>
+  <h1>iRMC Viewer</h1>
+  <span class="sub">консоли серверов Fujitsu iRMC (Mahogany AVR) — без Java</span>
+</header>
+<main>
+  <div id="sidebar">
+    <h2>Серверы</h2>
+    <div id="slist"></div>
+    <div style="padding:12px 14px">
+      <button class="btn sec" id="addBtn" style="width:100%">+ Добавить сервер</button>
+    </div>
+  </div>
+
+  <div id="screen">
+    <div class="bar">
+      <h3 id="title">Выберите сервер</h3>
+      <button class="btn green" id="connBtn" disabled>▶ Запустить консоль (noVNC)</button>
+      <button class="btn sec" id="shotBtn" disabled>Снимок</button>
+      <button class="btn sec" id="disconnBtn">Закрыть</button>
+      <span id="status"></span>
+    </div>
+    <div id="cvwrap">
+      <span class="hint">Экран появится после нажатия «Запустить консоль (noVNC)»</span>
+      <canvas id="cv" width="2" height="2" style="display:none"></canvas>
+      <iframe id="noviframe" allow="autoplay; clipboard-write; fullscreen" title="noVNC"></iframe>
+    </div>
+    <div id="msg"></div>
+  </div>
+
+  <div id="det">
+    <h3>Данные сервера</h3>
+    <div class="tools">
+      <button class="btn sec" id="infoBtn" disabled>Обновить</button>
+      <button class="btn sec" id="editBtn" disabled>Изменить</button>
+    </div>
+    <div id="info"></div>
+  </div>
+</main>
+
+<!-- add/edit dialog -->
+<dialog id="dlg">
+  <form method="dialog" id="dlgForm" style="display:flex;flex-direction:column;gap:10px;min-width:320px">
+    <h3 style="margin:0">Сервер</h3>
+    <label>Название <input type="text" id="d_name" style="width:100%"></label>
+    <label>Адрес (host/IP) <input type="text" id="d_host" required style="width:100%"></label>
+    <label>Пользователь <input type="text" id="d_user" style="width:100%"></label>
+    <label>Пароль <input type="password" id="d_pass" style="width:100%"></label>
+    <div style="display:flex;gap:10px">
+      <label>Порт <input type="number" id="d_port" value="80" style="width:100%"></label>
+      <label style="display:flex;align-items:center;gap:6px;margin-top:24px"><input type="checkbox" id="d_secure"> SSL</label>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:6px">
+      <button class="btn" value="cancel" formmethod="dialog">Отмена</button>
+      <button class="btn green" id="dlgSave" value="save">Сохранить</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+const $=(id)=>document.getElementById(id);
+let servers=[], sel=null;
+const ls=$('slist'), title=$('title'), info=$('info'), msg=$('msg');
+
+function stat(t){$('status').textContent=t;}
+
+async function load(){
+  const r=await fetch('/api/servers'); const j=await r.json();
+  servers=j.servers||[];
+  renderList();
+}
+function renderList(){
+  ls.innerHTML='';
+  servers.forEach(s=>{
+    const d=document.createElement('div'); d.className='sitem'+(sel===s.id?' sel':'');
+    const info2=document.createElement('span');
+    const n=document.createElement('div'); n.className='n'; n.textContent=s.name||s.host;
+    const m=document.createElement('div'); m.className='m'; m.textContent=`${s.host}:${s.port}${s.secure?' · SSL':''}`;
+    info2.append(n,m);
+    $('shotBtn').disabled=false;
+  const del=document.createElement('button'); del.className='del'; del.textContent='✕'; del.title='Удалить';
+    del.onclick=async(e)=>{e.stopPropagation(); await fetch('/api/servers/'+encodeURIComponent(s.id),{method:'DELETE'}); if(sel===s.id){sel=null;$('connBtn').disabled=true;$('infoBtn').disabled=true;$('editBtn').disabled=true;title.textContent='Выберите сервер';info.innerHTML='';$('cvwrap').classList.remove('connected');} await load();};
+    d.append(info2,del);
+    d.onclick=()=>select(s.id);
+    ls.appendChild(d);
+  });
+}
+
+function select(id){
+  sel=id; renderList();
+  const s=servers.find(x=>x.id===id); if(!s) return;
+  title.textContent=(s.name||s.host);
+  info.textContent=''; msg.innerHTML=''; $('cvwrap').classList.remove('connected');
+  $('connBtn').disabled=false; $('infoBtn').disabled=false; $('editBtn').disabled=false; $('shotBtn').disabled=true;
+  infoBtn(s.id);
+}
+
+$('addBtn').onclick=()=>openDlg(null);
+$('editBtn').onclick=()=>{const s=servers.find(x=>x.id===sel); openDlg(s);};
+$('infoBtn').onclick=()=>{if(sel) infoBtn(sel);};
+
+function openDlg(s){
+  $('d_name').value=s?s.name||'':''; $('d_host').value=s?s.host||'':''; $('d_user').value=s?s.username||'admin':''; $('d_pass').value='';
+  $('d_port').value=s?s.port||80:80; $('d_secure').checked=s?(!!s.secure):false;
+  $('dlg').showModal();
+  $('dlgSave').onclick=(e)=>{
+    e.preventDefault();
+    const cfg={name:$('d_name').value.trim()||$('d_host').value.trim(),host:$('d_host').value.trim(),username:$('d_user').value.trim(),password:$('d_pass').value,port:Number($('d_port').value)||80,secure:$('d_secure').checked};
+    (async()=>{
+      if(s && !$('d_pass').value){ await fetch('/api/servers/'+encodeURIComponent(s.id),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:cfg.name,port:cfg.port,secure:cfg.secure})}); }
+      else if(s){ await fetch('/api/servers/'+encodeURIComponent(s.id),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)}); }
+      else { await fetch('/api/servers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)}); }
+      $('dlg').close(); await load();
+    })();
+  };
+}
+
+async function infoBtn(id){
+  info.textContent='Запрашиваю…';
+  const r=await fetch('/api/info',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({serverId:id})});
+  const j=await r.json();
+  const add=(k,v)=>addRow(k, v==null||v===''?'—':v);
+  if(j.ok && j.inventory){
+    const I=j.inventory;
+    info.innerHTML='';
+    add('Модель', I['System Type']);
+    add('Шасси', I['Chassis Type']);
+    add('Серийный', I['Serial']);
+    add('BIOS', I['BIOS Version']);
+    add('GUID', I['System GUID']);
+    add('Имя системы', I['System Name']);
+    add('Описание', I['System Description']);
+    add('ОС', I['System O/S']);
+    add('IP системы', I['System IP']);
+    add('Asset Tag', I['System Asset Tag']);
+    add('Power LED', I['Power LED']);
+    add('Error LED', I['Error LED']);
+  } else if(j.ok){
+    info.innerHTML='';
+    addRow('Адрес',`${j.host}:${j.port}${j.secure?' (SSL)':''}`);
+    add('Система',j.title); add('Устройство',j.realm); add('HTTP',j.httpStatus+(j.authScheme?' ('+j.authScheme+')':'')); add('Веб-сервер',j.server);
+  } else info.textContent='Сервер недоступен: '+(j.error||'');
+  function addRow(k,v){const t=document.createElement('table');t.className='ks';t.innerHTML=`<tr><td class="k">${k}</td><td></td></tr>`;t.lastChild.firstChild.innerHTML=v;info.appendChild(t);}
+}
+
+$('connBtn').onclick=()=>{ connectConsole(0); };
+$('shotBtn').onclick=async()=>{
+  if(!window.__token){ stat('нет активной сессии'); return; }
+  stat('Снимок…');
+  try{
+    const r=await fetch('/api/snapshot/'+encodeURIComponent(window.__token));
+    const j=await r.json();
+    if(j.ok && j.png){ const img=new Image(); img.onload=()=>{ const c=$('cv'); c.width=j.width; c.height=j.height; c.getContext('2d').drawImage(img,0,0); }; img.src=j.png; stat('Снимок '+j.width+'×'+j.height+(j.saved?(' → '+j.saved):'')); }
+    else stat('Снимок: '+(j.error||'нет кадра'));
+  }catch(e){ stat('Ошибка снимка: '+String(e&&e.message||e)); }
+};
+
+function openViewer(token, j){
+  $('cvwrap').classList.add('connected');
+  window.__token=token;
+  // Display is handled by the embedded noVNC iframe; keep the old canvas RFB
+  // client and snapshot loop unused to avoid a second session on the console.
+}
+
+// Reliable live view: poll the server-side decoded framebuffer (the same image
+// the snapshot uses) and draw it, so the console always shows even if the RFB
+// streaming client stalls.
+let _snapTimer=null;
+function startSnapshotLoop(token){
+  if(_snapTimer) clearInterval(_snapTimer);
+  const cv=$('cv');
+  const grab=async()=>{
+    try{
+      const r=await fetch('/api/snapshot/'+encodeURIComponent(token));
+      const j=await r.json();
+      if(j.ok && j.png){ const img=new Image(); img.onload=()=>{ if(cv.width!==j.width){cv.width=j.width;cv.height=j.height;} cv.getContext('2d').drawImage(img,0,0); }; img.src=j.png; }
+    }catch{}
+  };
+  grab();
+  _snapTimer=setInterval(grab, 2000);
+}
+$('disconnBtn').onclick=()=>{ if(rfb) rfb.close(); if(_snapTimer){clearInterval(_snapTimer);_snapTimer=null;} stat('Закрыто'); };
+
+function showMsg(t,ok){ msg.innerHTML=`<div class="alert ${ok?'ok':'err'}"></div>`; msg.firstChild.textContent=t; }
+
+let rfb=null;
+
+function startRfb(token,w,h){
+  if(rfb){ try{rfb.close();}catch{} }
+  const cv=$('cv');
+  rfb=new RfbClient(token,cv,{onStatus:stat,onMsg:showMsg, onClosed:()=>{
+    stat('Соединение закрыто…');
+    // session is dead -> establish a FRESH one (fresh httpdata), like the Java applet does
+    setTimeout(()=>{ if(sel) connectConsole(1); },800);
+  }});
+  rfb.open();
+}
+
+async function connectConsole(attempt){
+  if(!sel) return;
+  $('connBtn').disabled=true; stat(attempt?('Переподключение '+attempt+'/3…'):'Подключение к AVR…');
+  const r=await fetch('/api/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({serverId:sel})});
+  const j=await r.json();
+  if(!j.ok){ $('connBtn').disabled=false; if(attempt<3){ stat('Ошибка: '+((j.error||'').slice(0,70))+' — повтор…'); setTimeout(()=>connectConsole(attempt+1),1500); } else { stat('Не удалось подключиться: '+(j.error||'')); showMsg(j.error||'Ошибка подключения',false); } return; }
+  $('connBtn').disabled=false; stat('Экран '+j.width+'×'+j.height);
+  window.__token=j.token; $('shotBtn').disabled=false;
+  // Embed real noVNC in an iframe (fwab-style) with autoconnect + scale.
+  const u = '/novnc/vnc.html?host=' + encodeURIComponent(location.hostname || location.host) +
+            '&port=' + encodeURIComponent(location.port) +
+            '&path=' + encodeURIComponent('vnc?token=' + j.token) +
+            '&autoconnect=1&resize=remote&reconnect=1&show_dot=1';
+  $('noviframe').src = u;
+  openViewer(j.token, j);
+  stat('Консоль открыта в noVNC');
+}
+
+// ---- minimal RFB 3.8 client (noVNC-style) ------------------------------
+class RfbClient{
+  constructor(token,cv,ev){this.token=token;this.cv=cv;this.cvctx=cv.getContext('2d');this.ev=ev;this.stage='vers';this.buf=new Uint8Array(0);this.w=0;this.h=0;this.img=null;
+    window.__rfb={rx:0,draws:0,rects:0,stage:this.stage};}
+  open(){
+    const url=(location.protocol==='https:'?'wss://':'ws://')+location.host+'/vnc?token='+encodeURIComponent(this.token);
+    const ws=this.ws=new WebSocket(url);
+    ws.binaryType='arraybuffer';
+    ws.onopen=()=>this.ev.onStatus('Соединение…');
+    ws.onmessage=(ev)=>{const d=new Uint8Array(ev.data); this.buf=concat(this.buf,d); window.__rfb.rx+=d.length; try{this.drain();}catch(e){ console.log('DRAIN-ERR', String(e).slice(0,120)); }};
+    ws.onclose=()=>{ this.ev.onStatus('Соединение закрыто'); this.ev.onClosed&&this.ev.onClosed(); };
+    ws.onerror=()=>{this.ev.onStatus('Ошибка WebSocket');};
+  }
+  close(){try{this.ws&&this.ws.close();}catch{}}
+  send(b){ if(this.ws&&this.ws.readyState===1) this.ws.send(b.buffer.slice(b.byteOffset,b.byteOffset+b.byteLength)); }
+  be16(o){return (this.buf[o]<<8)|this.buf[o+1];}
+  be32(o){return ((this.buf[o]<<24)|(this.buf[o+1]<<16)|(this.buf[o+2]<<8)|this.buf[o+3])>>>0;}
+  drain(){
+    while(true){
+      const b=this.buf;
+      if(this.stage==='vers'){
+        if(b.length<12)break;
+        this.send(str('RFB 003.008\n'));
+        b.copyWithin(0,12); this.buf=this.buf.slice(12); this.stage='sec';
+      } else if(this.stage==='sec'){
+        if(b.length<1)break; const cnt=b[0];
+        if(b.length<1+cnt)break;
+        this.buf=b.slice(1+cnt); this.send(new Uint8Array([1])); this.stage='secres';
+      } else if(this.stage==='secres'){
+        if(b.length<4)break;
+        const ok=b[0]===0&&b[1]===0&&b[2]===0&&b[3]===0;
+        this.buf=b.slice(4);
+        if(!ok){this.ev.onStatus('Отказ авторизации');this.close();return;}
+        this.send(new Uint8Array([0])); // shared=0
+        this.stage='init';
+      } else if(this.stage==='init'){
+        if(b.length<4+16+4)break;
+        this.w=this.be16(0); this.h=this.be16(2);
+        const nameLen=this.be32(20);
+        if(b.length<4+16+4+nameLen)break;
+        this.buf=b.slice(4+16+4+nameLen);
+        this.setupCanvas();
+        this.sendSetEncodings();
+        this.requestUpdate(false);
+        this.stage='ready';
+        window.__rfb.stage='ready';
+        this.attachInput();
+        this.ev.onStatus(`Экран ${this.w}×${this.h}`);
+      } else if(this.stage==='ready'){
+        if(b.length<1)break;
+        const t=b[0];
+        if(t===0){
+          if(b.length<4)break;
+          const nr=this.be16(2); let off=4; let consumed=true;
+          for(let i=0;i<nr;i++){
+            if(b.length<off+12){consumed=false;break;}
+            const rx=this.be16(off),ry=this.be16(off+2),rw=this.be16(off+4),rh=this.be16(off+6),enc=this.be32(off+8); off+=12;
+            if(enc===0){ const n=rw*rh*4; if(b.length<off+n){consumed=false;break;} this.drawRect(rx,ry,rw,rh,b.subarray(off,off+n)); off+=n; }
+            else { consumed=false; this.ev.onStatus('неизвестное кодирование '+enc); break; }
+          }
+          if(!consumed)break;
+          this.buf=b.slice(off); this.requestUpdate(true);
+        } else { this.ev.onStatus('msg '+t); break; }
+      } else break;
+    }
+  }
+  setupCanvas(){
+    const cv=this.cv; cv.width=this.w; cv.height=this.h;
+    this.img=this.cvctx.createImageData(this.w,this.h);
+    cv.style.aspectRatio=this.w+' / '+this.h;
+  }
+  drawRect(x,y,w,h,bytes){
+    window.__rfb.draws++; window.__rfb.rects+=w*h;
+    const img=this.img,d=img.data,W=this.w;
+    for(let j=0;j<h;j++){ const base=((y+j)*W+x)*4; for(let i=0;i<w;i++){ const o=base+i*4,so=i*4; d[o]=bytes[so+2]; d[o+1]=bytes[so+1]; d[o+2]=bytes[so]; d[o+3]=255; } }
+    this.cvctx.putImageData(img,0,0);
+  }
+  sendSetEncodings(){ const p=new Uint8Array(8); p[0]=2; p[3]=1; for(let i=0;i<4;i++) p[4+i]=(i<4?0:0); /* enc 0 raw */ this.send(p); }
+  requestUpdate(inc){ const p=new Uint8Array(10); p[0]=3; p[1]=inc?1:0; p[2]=0;p[3]=0;p[4]=0;p[5]=0; p[6]=this.w>>8;p[7]=this.w&255; p[8]=this.h>>8;p[9]=this.h&255; this.send(p); }
+  attachInput(){
+    const cv=this.cv,self=this;
+    const pos=(e)=>{const r=cv.getBoundingClientRect(); return [Math.round((e.clientX-r.left)*(self.w/r.width)), Math.round((e.clientY-r.top)*(self.h/r.height))];};
+    cv.onmousemove=(e)=>{const[x,y]=pos(e); self.pointer(e.buttons,x,y);};
+    cv.onmousedown=(e)=>{const[x,y]=pos(e); self.pointer(e.buttons,x,y);};
+    cv.onmouseup=(e)=>{const[x,y]=pos(e); self.pointer(e.buttons,x,y);};
+    cv.oncontextmenu=(e)=>e.preventDefault();
+    cv.onwheel=(e)=>{e.preventDefault(); const[x,y]=pos(e); self.pointer(e.buttons | ((e.deltaY<0)?8:16), x, y);};
+    cv.tabIndex=0;
+    cv.onkeydown=(e)=>{ if(!e.repeat) self.key(e.keyCode,true); if([32,37,38,39,40].includes(e.keyCode))e.preventDefault(); };
+    cv.onkeyup=(e)=>{ self.key(e.keyCode,false); };
+  }
+  pointer(buttons,x,y){
+    let mask=0; if(buttons&1)mask|=1; if(buttons&4)mask|=2; if(buttons&2)mask|=4; // left,right,middle
+    if(buttons&8)mask|=8; if(buttons&16)mask|=16;
+    const p=new Uint8Array(6); p[0]=mask; p[1]=0; p[2]=x>>8;p[3]=x&255;p[4]=y>>8;p[5]=y&255; this.send(p);
+  }
+  key(kc,down){ const p=new Uint8Array(8); p[0]=down?1:0; p[1]=0;p[2]=0;p[3]=0; const v=kc>>>0; p[4]=(v>>>24)&255;p[5]=(v>>>16)&255;p[6]=(v>>>8)&255;p[7]=v&255; this.send(p); }
+}
+function concat(a,b){ const r=new Uint8Array(a.length+b.length); r.set(a); r.set(b,a.length); return r; }
+function str(s){ const e=new TextEncoder(); return e.encode(s); }
+
+load();
+</script>
+</body>
+</html>

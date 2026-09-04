@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JNLP File for AVR Viewer Application -->
+<jnlp spec="1.0+" codebase="http://10.67.17.101/" >
+  <information> 
+    <title>iRMC S2 Advanced Video Redirection Viewer</title>
+    <vendor>Fujitsu Technology Solutions</vendor>
+    <description>Java Viewer for Advanced Video Redirection (AVR) of PRIMERGY servers.</description>
+    <icon href="rv_logo.gif"/>
+    <icon kind="splash" href="rv_splash.gif"/>
+  </information>
+  <security>
+      <all-permissions/>
+  </security>
+  <resources>
+    <j2se version="1.4.2+" java-vm-args="-Xmx160m" />
+    <jar href="avr_iRMC_S2.jar"/>
+  </resources>
+  <application-desc
+  name="iRMC S2 Advanced Video Redirection Viewer"
+  main-class="com.serverengines.mahogany.MahoganyViewer"
+>
+<argument>-ipaddress=10.67.17.101</argument>
+<argument>-sessiontype=kvm</argument>
+<argument>-httpdata=5B9BC22BB7B587E868D94F76EBF08306450512D5E68EE33FBFB77CF0720C14A6FFEBB066D32FB8F6FC97593095359E0DE248792F3D004A4FC97B37185DD00CCCBA94840515F44BDF8C172E6E09D287BAF04AC958610F49C7AA53EEC58E89727A359C3AC90B583AAD974EB489203169D3</argument>
+<argument>-username=admin</argument>
+<argument>-digest=b241f04d46c33cd0f7dc1026931be96d</argument>
+<argument>-language=en</argument>
+<argument>-languageList=en,de,ja</argument>
+<argument>-HttpPort=80</argument>
+<argument>-HttpsPort=443</argument>
+<argument>-VncPort=80</argument>
+<argument>-StoragePort=5901</argument>
+  </application-desc>
+</jnlp>
