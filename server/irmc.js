@@ -288,8 +288,9 @@ export class IrmcClient {
         const triplet = r.u32(); const repeat = r.u32();
         const raw = r.u32(); const scrunch = r.u32();
         const low = [], high = [];
-        for (let i = 0; i < 64; i++) low.push(r.u32());
-        for (let i = 0; i < 64; i++) high.push(r.u32());
+        // Java EnhanceBitBlt.readBuffer(): snoop maps are INTERLEAVED per row —
+        // low[i] then high[i] in one loop (not low[0..63] block then high block).
+        for (let i = 0; i < 64; i++) { low.push(r.u32()); high.push(r.u32()); }
         const data = r.bytes(scrunch);
         const type = blt & 0x8000 ? blt & 0x7FFF : blt;
         if (type === 496) this.fb.enhanceBitBlt(tw, th, triplet, repeat, raw, scrunch, low, high, data);

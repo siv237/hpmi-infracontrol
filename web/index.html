@@ -255,11 +255,13 @@ async function connectConsole(attempt){
   if(!j.ok){ $('connBtn').disabled=false; if(attempt<3){ stat('Ошибка: '+((j.error||'').slice(0,70))+' — повтор…'); setTimeout(()=>connectConsole(attempt+1),1500); } else { stat('Не удалось подключиться: '+(j.error||'')); showMsg(j.error||'Ошибка подключения',false); } return; }
   $('connBtn').disabled=false; stat('Экран '+j.width+'×'+j.height);
   window.__token=j.token; $('shotBtn').disabled=false;
-  // Embed real noVNC in an iframe (fwab-style) with autoconnect + scale.
+  // Embed real noVNC in an iframe. resize=scale fits the whole server screen
+  // into the container (no bottom clipping); our RFB bridge has no
+  // ExtendedDesktopSize, so resize=remote cannot actually resize the host.
   const u = '/novnc/vnc.html?host=' + encodeURIComponent(location.hostname || location.host) +
             '&port=' + encodeURIComponent(location.port) +
             '&path=' + encodeURIComponent('vnc?token=' + j.token) +
-            '&autoconnect=1&resize=remote&reconnect=1&show_dot=1';
+            '&autoconnect=1&resize=scale&reconnect=1&show_dot=1';
   $('noviframe').src = u;
   openViewer(j.token, j);
   stat('Консоль открыта в noVNC');

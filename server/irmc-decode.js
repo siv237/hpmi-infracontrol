@@ -194,11 +194,14 @@ export class IrmcFramebuffer {
         if (j > maxX) maxX = j;
         const tileY = i << sh, tileX = j << sw;
         for (let k = 0; k < m; k++) {
-          if (k + tileY >= this.height) break;
+          // Java walks ALL m rows and only guards the pixel write; the RLE
+          // streams must keep being consumed even past the bottom edge,
+          // otherwise every following tile decodes from a desynced stream.
+          const inY = k + tileY < this.height;
           let p = (k + tileY) * this.width + tileX;
           for (let i2 = 0; i2 < n; i2++) {
             const blue = decB.next();
-            if (i2 + tileX < this.width) {
+            if (inY && i2 + tileX < this.width) {
               if (bpp > 8) {
                 const green = decG.next();
                 const red = bpp > 16 ? decR.next() : 0;
@@ -239,10 +242,12 @@ export class IrmcFramebuffer {
         if (j > maxX) maxX = j;
         const tileY = i << sh, tileX = j << sw;
         for (let k = 0; k < m; k++) {
-          if (k + tileY >= this.height) break;
+          // Keep consuming the RLE stream past the bottom edge (Java walks all
+          // m rows and only guards the write).
+          const inY = k + tileY < this.height;
           let p = (k + tileY) * this.width + tileX;
           for (let i2 = 0; i2 < n; i2++) {
-            if (i2 + tileX < this.width) {
+            if (inY && i2 + tileX < this.width) {
               const v = dec.next() & 0xFF;
               if (this.bpp > 16) {
                 let px = 0;
