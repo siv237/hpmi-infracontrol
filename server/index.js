@@ -30,15 +30,22 @@ function createSession(name, host) {
   const sess = {
     token, name, host,
     listeners: new Set(),
+    fullCbs: new Set(),
     cli: null, state: 'starting', width: 0, height: 0, status: [], error: null, startedAt: Date.now(),
     clients: new Set(),
     lastFrameAt: Date.now(),
     fb(rects) { const c = sess.cli; return c ? { width: c.fb.width, height: c.fb.height, pix: rects ? c.fb.getRGBFor(rects) : c.fb.getRGB() } : { width: 0, height: 0, pix: new Uint32Array(0) }; },
+    fbSize() { const c = sess.cli; return c ? { width: c.fb.width, height: c.fb.height } : { width: 0, height: 0 }; },
     key: (k, d) => sess.cli && sess.cli.key(k, d),
     mouseMove: (x, y) => sess.cli && sess.cli.mouseMove(x, y),
     buttonState: (x, y, m) => sess.cli && sess.cli.buttonState(x, y, m),
     subscribe(cb) { sess.listeners.add(cb); },
     unsubscribe(cb) { sess.listeners.delete(cb); },
+    onFull(cb) { sess.fullCbs.add(cb); },
+    offFull(cb) { sess.fullCbs.delete(cb); },
+    // "Keyframe": push a full framebuffer to every client so any frames lost to
+    // backpressure / fast bursts are repaired instead of leaving black gaps.
+    forceFull() { for (const cb of sess.fullCbs) { try { cb(); } catch {} } },
   };
   sessions.set(token, sess);
   sessionsByHost.set(host, token);
@@ -49,6 +56,7 @@ function closeSession(tokenOrSess) {
   const sess = typeof tokenOrSess === 'string' ? sessions.get(tokenOrSess) : tokenOrSess;
   if (!sess) return;
   if (sess._refresh) clearInterval(sess._refresh);
+  if (sess._keyframe) clearInterval(sess._keyframe);
   if (sess.cli) { try { sess.cli.close(); } catch {} }
   if (sessionsByHost.get(sess.host) === sess.token) sessionsByHost.delete(sess.host);
   sessions.delete(sess.token);
@@ -87,18 +95,19 @@ async function startSession(sess, host, user, pass, port, secure) {
   sess.cli = cli;
   await cli.start();
   // Static/black screens produce no change-frames, so the framebuffer stays
-  // blank even though the device shows content. Periodically Invalidate to make
-  // the device resend the full current screen — but only while idle. When
-  // frames are flowing (e.g. while typing) a forced invalidate would flood the
-  // pipe with a redundant full-screen resend and could stall input latency.
-  sess._refresh = setInterval(() => {
+  // blank even though the device shows content. Also, fast bursts can drop
+  // frame pieces leaving black gaps. Act as a periodic "keyframe": every 10s
+  // force the device to resend the full current screen (invalidateFull) and
+  // push a full framebuffer to every client. Resolution re-verification rides
+  // on this too: the resend is at the CURRENT mode, and on a size change the
+  // VNC layer emits DesktopSize so noVNC resizes (keeps aspect ratio).
+  sess._keyframe = setInterval(() => {
     try {
       if (!sess.cli) return;
-      if (Date.now() - sess.lastFrameAt < 2000) return; // still active, skip
-      sess.lastFrameAt = Date.now();
       sess.cli.invalidateFull();
+      sess.forceFull();
     } catch {}
-  }, 3000);
+  }, 10000);
   return sess;
 }
 

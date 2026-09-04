@@ -63,6 +63,9 @@ export function attachVnc(ws, sess) {
   const MAX_BUFFERED = 1 << 20; // skip frames while >1MB is unsent in the socket
   const FRAME_MS = 40;          // ~25 fps cap
 
+  // FramebufferSize last told to noVNC; a change -> emit DesktopSize + full.
+  let sentW = 0, sentH = 0;
+
   const frameCb = (fb, rects) => {
     if (phase !== 'ready') return;
     if (pendingRects === null) pendingRects = [];
@@ -70,10 +73,21 @@ export function attachVnc(ws, sess) {
     scheduleFlush();
   };
 
+  // Registered by the session for periodic "keyframe" (full redraw) requests.
+  const forceFullCb = () => {
+    if (phase !== 'ready') return;
+    pendingRects = null;
+    pendingFull = true;
+    scheduleFlush();
+  };
+  if (sess.onFull) sess.onFull(forceFullCb);
+
   function scheduleFlush() {
     if (flushTimer || flushing || phase !== 'ready') return;
     flushTimer = setTimeout(() => { flushTimer = null; doFlush(); }, FRAME_MS);
   }
+
+  function sizeOf() { return (sess.fbSize ? sess.fbSize() : sess.fb()); }
 
   function doFlush() {
     if (flushing) return;
@@ -87,6 +101,13 @@ export function attachVnc(ws, sess) {
         pendingFull = true;
         setTimeout(scheduleFlush, 100);
         return;
+      }
+      const d = sizeOf();
+      // Resolution changed under us -> full redraw (client display was cleared
+      // by DesktopSize). sentW==0 marks the very first frame (matches ServerInit).
+      if (d.width !== sentW || d.height !== sentH) {
+        pendingRects = null;
+        pendingFull = true;
       }
       const full = pendingFull || pendingRects === null;
       const rects = pendingRects;
@@ -104,12 +125,13 @@ export function attachVnc(ws, sess) {
   function atexit() {
     if (keepalive) clearInterval(keepalive);
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+    if (sess.offFull) sess.offFull(forceFullCb);
     sess.unsubscribe(frameCb);
   }
 
   function sendUpdate(rects) {
-    const probe = sess.fb();
-    const w = probe.width, h = probe.height;
+    const d = sizeOf();
+    const w = d.width, h = d.height;
     if (!w || !h) return;
     // Validate rects; too many small rects -> one full-screen rect.
     let rs;
@@ -123,11 +145,26 @@ export function attachVnc(ws, sess) {
     // followed by its own data: [msg hdr][hdr1][pix1][hdr2][pix2]... NOT all
     // headers first then all payloads (noVNC reads them interleaved -> desync
     // once numRects >= 2).
+    let numRects = rs.length;
+    const leads = [];
+    if (sentW !== 0 && (w !== sentW || h !== sentH)) {
+      // Resolution change: prepend a DesktopSize pseudo-rect so noVNC resizes
+      // its display and rescales (keeps aspect ratio inside its window).
+      const ds = Buffer.alloc(12);
+      ds.writeUInt16BE(0, 0);
+      ds.writeUInt16BE(0, 2);
+      ds.writeUInt16BE(w, 4);
+      ds.writeUInt16BE(h, 6);
+      ds.writeUInt32BE(0xFFFFFF21, 8); // DesktopSize (-223)
+      leads.push(ds);
+      numRects += 1;
+    }
+    sentW = w; sentH = h;
     const msg = Buffer.alloc(4);
     msg[0] = 0; // FramebufferUpdate
     msg[1] = 0;
-    msg.writeUInt16BE(rs.length, 2);
-    const parts = [msg];
+    msg.writeUInt16BE(numRects, 2);
+    const parts = [msg, ...leads];
     for (const r of rs) {
       const W = Math.min(r.w, w - r.x);
       const H = Math.min(r.h, h - r.y);
