@@ -6,7 +6,6 @@
 
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { appendFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -17,18 +16,6 @@ import { discover, getSession, inventory, parseInventory } from './discover.js';
 import { probe } from './probe.js';
 import { attachVnc } from './vnc.js';
 import { encodePng, saveScreenshot } from './png.js';
-
-// Lightweight diagnostic logger (reconnect debugging), file: dbg-vnc.log
-const __ip = path.dirname(fileURLToPath(import.meta.url));
-const Dbg = (() => {
-  let on = process.env.VNC_DBG === '1';
-  const file = path.join(__ip, 'dbg-vnc.log');
-  return { log(msg) {
-    if (!on) return;
-    try { console.log(`[${new Date().toISOString().slice(11, 23)}] idx ${msg}`); } catch {}
-    appendFile(file, `[${new Date().toISOString()}] ${msg}\n`).catch(() => {});
-  } };
-})();
 
 const PORT = Number(process.env.PORT || 1845);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -47,7 +34,7 @@ function createSession(name, host) {
     clients: new Set(),
     lastFrameAt: Date.now(),
     fb(rects) { const c = sess.cli; return c ? { width: c.fb.width, height: c.fb.height, pix: rects ? c.fb.getRGBFor(rects) : c.fb.getRGB() } : { width: 0, height: 0, pix: new Uint32Array(0) }; },
-    key: (k, d) => { Dbg.log(`sess.key ${sess.host} hid=${k} down=${d}`); return sess.cli && sess.cli.key(k, d); },
+    key: (k, d) => sess.cli && sess.cli.key(k, d),
     mouseMove: (x, y) => sess.cli && sess.cli.mouseMove(x, y),
     buttonState: (x, y, m) => sess.cli && sess.cli.buttonState(x, y, m),
     subscribe(cb) { sess.listeners.add(cb); },
@@ -61,7 +48,6 @@ function createSession(name, host) {
 function closeSession(tokenOrSess) {
   const sess = typeof tokenOrSess === 'string' ? sessions.get(tokenOrSess) : tokenOrSess;
   if (!sess) return;
-  Dbg.log(`closeSession ${sess.host} state=${sess.state}`);
   if (sess._refresh) clearInterval(sess._refresh);
   if (sess.cli) { try { sess.cli.close(); } catch {} }
   if (sessionsByHost.get(sess.host) === sess.token) sessionsByHost.delete(sess.host);
@@ -90,12 +76,11 @@ async function startSession(sess, host, user, pass, port, secure) {
         if (m) { sess.width = +m[1]; sess.height = +m[2]; }
       }
     },
-    onError: (e) => { Dbg.log(`cli.onError ${sess.host}: ${String(e && e.message || e)}`); sess.error = e; sess.state = 'error'; sess.notifyFrame && null; },
-    onExit: () => { Dbg.log(`cli.onExit ${sess.host} state=${sess.state}`); sess.state = 'closed'; },
+    onError: (e) => { sess.error = e; sess.state = 'error'; sess.notifyFrame && null; },
+    onExit: () => { sess.state = 'closed'; },
     onFrame: (fb, rects) => {
       sess.width = fb.width; sess.height = fb.height;
       sess.lastFrameAt = Date.now();
-      Dbg.log(`onFrame ${fb.width}x${fb.height} rects=${rects ? rects.length : 0}`);
       for (const cb of sess.listeners) cb(fb, rects);
     },
   });
@@ -250,14 +235,6 @@ const server = http.createServer(async (req, res) => {
     catch (e) { return json(res, 500, { ok: false, error: String(e.message || e) }); }
   }
 
-  // Browser-side diagnostics relay (noVNC _fail message, captured without DevTools).
-  if (url.pathname === '/api/dbg') {
-    const m = url.searchParams.get('m') || '';
-    Dbg.log(`browser: ${m}`);
-    console.error(`[browser] ${m}`);
-    return json(res, 200, { ok: true });
-  }
-
   if (url.pathname === '/api/servers' && req.method === 'POST') {
     const body = await readJson(req, res);
     if (!body) return;
@@ -395,10 +372,8 @@ server.on('upgrade', (req, socket, head) => {
     if (!sess.cli) { socket.write('HTTP/1.1 409 Conflict\r\n\r\n'); socket.destroy(); return; }
     wss.handleUpgrade(req, socket, head, (ws) => {
       if (ws.protocol) { /* keep negotiated subprotocol */ }
-      Dbg.log(`vnc open host=${sess.host} clientsAfter=${sess.clients.size + 1}`);
       sess.clients.add(ws);
-      ws.on('close', (code, reason) => {
-        Dbg.log(`vnc-ws close host=${sess.host} code=${code} reason=${String(reason)} clientsBefore=${sess.clients.size}`);
+      ws.on('close', () => {
         sess.clients.delete(ws);
         if (sess.clients.size === 0) {
           // No one is watching -> release the console (single-session device).

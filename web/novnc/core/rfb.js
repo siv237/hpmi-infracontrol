@@ -953,12 +953,6 @@ export default class RFB extends EventTargetMixin {
      * should be logged but not sent to the user interface.
      */
     _fail(details) {
-        // [dbg] relay the failure reason to the bridge so it can be read from
-        // logs/server.log without opening browser DevTools.
-        try {
-            const m = encodeURIComponent(String(details));
-            fetch('/api/dbg?m=' + m, { method: 'POST', keepalive: true }).catch(() => {});
-        } catch (e) {}
         switch (this._rfbConnectionState) {
             case 'disconnecting':
                 Log.Error("Failed when disconnecting: " + details);
