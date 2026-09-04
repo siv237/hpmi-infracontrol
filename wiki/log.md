@@ -344,3 +344,10 @@ Java (PixelBufferImage.enhanceBitBltHLC / EnhanceBitBlt.readBuffer):
   переходов разрешений/режима), `--port N`, `--log-dir DIR`.
 - Режим `--debug` = env IRMC_DEBUG=1: логируются InformVesaMode (mode/WxH@bpp,
   в т.ч. текстовый режим загрузки) + переходы размера фреймбуфера.
+
+## [2026-09-04] project | Текстовый режим (mode 3 640x400) — крошечное окно
+Причина: у noVNC scaleViewport=false (настройка resize=scale не применялась),
+поэтому маленький текстовый кадр рендерился 1:1 в углу. Fix: в app/ui.js
+принудительно UI.rfb.scaleViewport = true (оба места: connect() и
+applyResizeMode()) — noVNC всегда вписывает кадр в окно с сохранением AR.
+DesktopSize уже шлётся при смене разрешения, autoscale upscale в noVNC работает.

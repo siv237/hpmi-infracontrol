@@ -1096,7 +1096,10 @@ const UI = {
         UI.rfb.addEventListener("bell", UI.bell);
         UI.rfb.addEventListener("desktopname", UI.updateDesktopName);
         UI.rfb.clipViewport = UI.getSetting('view_clip');
-        UI.rfb.scaleViewport = UI.getSetting('resize') === 'scale';
+        // Force "fit to window, keep aspect ratio": always scale the viewport.
+        // DesktopSize-based resolution changes (e.g. boot text mode 640x400)
+        // otherwise render at 1:1 in the corner.
+        UI.rfb.scaleViewport = true;
         UI.rfb.resizeSession = UI.getSetting('resize') === 'remote';
         UI.rfb.qualityLevel = parseInt(UI.getSetting('quality'));
         UI.rfb.compressionLevel = parseInt(UI.getSetting('compression'));
@@ -1371,7 +1374,7 @@ const UI = {
     applyResizeMode() {
         if (!UI.rfb) return;
 
-        UI.rfb.scaleViewport = UI.getSetting('resize') === 'scale';
+        UI.rfb.scaleViewport = true; // always fit-to-window, keep aspect ratio
         UI.rfb.resizeSession = UI.getSetting('resize') === 'remote';
     },
 
