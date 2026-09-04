@@ -7,6 +7,14 @@
 
 const TRIPLET = 85, REPEAT = 170;
 
+// Standard DOS VGA palette (16 colours) used for text-mode rendering before a
+// real SetPalette arrives; boot text screens rely on these.
+const VGA16 = new Uint32Array([
+  0x000000, 0x0000AA, 0x00AA00, 0x00AAAA, 0xAA0000, 0xAA00AA,
+  0xAA5500, 0xAAAAAA, 0x555555, 0x5555FF, 0x55FF55, 0x55FFFF,
+  0xFF5555, 0xFF55FF, 0xFFFF55, 0xFFFFFF,
+]);
+
 const SHIFT_3BPP_16 = [4, 10, 15];
 const SHIFT_3BPP_24 = [7, 15, 23];
 const SHIFT_8BPP_16 = [3, 4, 7, 8, 9, 10, 14, 15];
@@ -28,10 +36,18 @@ export class IrmcFramebuffer {
     this.mode = -1;
     this.pix = new Uint32Array(0);
     this.idx = new Uint8Array(0);
-    this.palette = new Uint32Array(256);
+    this.palette = VGA16.slice(); // default VGA palette until SetPalette arrives
     this.isText = false;
     this.special4bpp = false;
     this._dirty = [];
+    // text mode (VGA character buffer + font)
+    this.ascii = new Uint8Array(0);
+    this.attr = new Uint8Array(0);
+    this.font = new Uint8Array(256 * 32);
+    this.fontW = 8;
+    this.fontH = 16;
+    this.cellsW = 0;
+    this.cellsH = 0;
     // cached 8bpp palette expansion + invalidation counter
     this._rgb = null;
     this.paletteVer = 0;
@@ -39,22 +55,38 @@ export class IrmcFramebuffer {
   }
 
   setVesaMode(mode, bpp, w, h) {
-    const eff = (bpp < 8) ? 8 : (bpp === 15 ? 16 : bpp);
+    // VGA text modes report bpp==0 (e.g. mode 3 = 640x400). Route them to the
+    // character+font renderer; everything else is treated as a pixel buffer.
+    const text = bpp === 0;
+    const eff = text ? 0 : ((bpp < 8) ? 8 : (bpp === 15 ? 16 : bpp));
     if (w * h !== this.pix.length || mode !== this.mode || eff !== this.bpp) {
       this.mode = mode;
       this.bpp = eff;
+      this.isText = text;
+      this.special4bpp = false;
       this.width = w;
       this.height = h;
       this.pix = new Uint32Array(w * h);
       this.idx = new Uint8Array(w * h);
-      this.isText = false;
-      this.special4bpp = false;
+      if (text) {
+        this.fontW = 8; this.fontH = 16;
+        this.cellsW = Math.max(1, Math.floor(w / this.fontW));
+        this.cellsH = Math.max(1, Math.floor(h / this.fontH));
+        this.ascii = new Uint8Array(this.cellsW * this.cellsH);
+        this.attr = new Uint8Array(this.cellsW * this.cellsH);
+        this.font = new Uint8Array(256 * 32);
+        this._rgb = null;
+      }
     }
   }
 
   standbyPower() {
     this.pix.fill(0);
     this.idx.fill(0);
+    if (this.isText) {
+      this.ascii.fill(0);
+      this.attr.fill(0);
+    }
     this.dirtyPush({ x: 0, y: 0, w: this.width, h: this.height });
   }
 
@@ -78,6 +110,7 @@ export class IrmcFramebuffer {
   // Like getRGB() but expands only the given rects from the 8bpp palette index
   // buffer, returning a persistent cached array (no allocation per update).
   getRGBFor(rects) {
+    if (this.isText) return this.pix; // already rendered as true-colour pixels
     if (this.bpp !== 8) return this.pix;
     if (this.paletteVer !== this._paletteVer) {
       this._paletteVer = this.paletteVer;
@@ -103,6 +136,12 @@ export class IrmcFramebuffer {
 
   // ---- bitBlt (226) ---------------------------------------------------------
   bitBlt(x, y, w, h, bltType, fontW, fontH, data, offset = 0) {
+    if (this.isText) {
+      // Text mode: (x,y,w,h) are in CELLS; data carries ASCII/attribute/font.
+      this.textBitBlt(x, y, w, h, bltType, fontW, fontH, data, offset);
+      this.dirtyPush({ x: x * this.fontW, y: y * this.fontH, w: w * this.fontW, h: h * this.fontH });
+      return;
+    }
     if (y + h > this.height) h -= (y + h) - this.height;
     if (x + w > this.width) w -= (x + w) - this.width;
     if (h < 1 || w < 1) return;
@@ -121,14 +160,7 @@ export class IrmcFramebuffer {
           p++;
         }
       }
-    } else if (this.bpp === 8 && !this.isText) {
-      let o = offset;
-      for (let i = 0; i < h; i++) {
-        const n = (y + i) * this.width + x;
-        for (let j = 0; j < w; j++) this.idx[n + j] = data[o++];
-      }
-    } else if (this.bpp === 8 && this.isText) {
-      // Text mode: fontW/fontH are cell size; we only preserve the index nibbles.
+    } else if (this.bpp === 8) {
       let o = offset;
       for (let i = 0; i < h; i++) {
         const n = (y + i) * this.width + x;
@@ -136,6 +168,80 @@ export class IrmcFramebuffer {
       }
     }
     this.dirtyPush({ x, y, w, h });
+  }
+
+  // Text mode renderer (port of the avr_irmc_s2.jar TextMode.imageRect +
+  // convertAttributesToPalette): the wire carries an ASCII buffer, an attribute
+  // buffer and a font table; each character glyph is blitted into pix using its
+  // foreground/background palette colours.
+  textBitBlt(x, y, w, h, bltType, fontW, fontH, data, offset = 0) {
+    if (fontW > 0) this.fontW = fontW;
+    if (fontH > 0) this.fontH = fontH;
+    const cw = this.cellsW = Math.max(1, Math.floor(this.width / this.fontW));
+    const ch = this.cellsH = Math.max(1, Math.floor(this.height / this.fontH));
+    const cells = cw * ch;
+    if (this.ascii.length !== cells) { this.ascii = new Uint8Array(cells); this.attr = new Uint8Array(cells); }
+    const x0 = Math.max(0, x), y0 = Math.max(0, y);
+    const x1 = Math.min(cw, x + w), y1 = Math.min(ch, y + h);
+
+    if (bltType === 264) {
+      // Full-screen text dump: cells*2 bytes, [ascii, attribute] per cell.
+      const n = Math.min(data.length - offset, cells * 2);
+      for (let c = 0; c < n; c += 2) {
+        this.ascii[c >> 1] = data[offset + c];
+        this.attr[c >> 1] = data[offset + c + 1];
+      }
+    } else {
+      let o = offset;
+      const rw = x1 - x0, rh = y1 - y0;
+      if (bltType & 1) { // ASCII
+        for (let i = 0; i < rh; i++) {
+          const base = (y0 + i) * cw;
+          for (let j = 0; j < rw; j++) this.ascii[base + x0 + j] = data[o++];
+        }
+      }
+      if (bltType & 2) { // attribute
+        for (let i = 0; i < rh; i++) {
+          const base = (y0 + i) * cw;
+          for (let j = 0; j < rw; j++) this.attr[base + x0 + j] = data[o++];
+        }
+      }
+      if (bltType & 4) { // font glyphs (replaces the whole font table)
+        const n = Math.min(data.length - o, this.font.length);
+        for (let k = 0; k < n; k++) this.font[k] = data[o + k];
+      }
+    }
+    this.renderTextRegion(x0, y0, x1, y1);
+  }
+
+  renderTextRegion(cx0, cy0, cx1, cy1) {
+    const gW = this.fontW, gH = this.fontH, cw = this.cellsW;
+    const W = this.width, H = this.height;
+    const pal = this.palette;
+    const font = this.font;
+    for (let row = cy0; row < cy1; row++) {
+      const baseY = row * gH;
+      for (let col = cx0; col < cx1; col++) {
+        const cell = row * cw + col;
+        const code = this.ascii[cell] & 0xFF;
+        const a = this.attr[cell];
+        const fg = pal[a & 0x0F] >>> 0;
+        const bg = pal[(a >> 4) & 0x0F] >>> 0;
+        const baseX = col * gW;
+        const glyphBase = code * 32;
+        for (let gy = 0; gy < gH; gy++) {
+          const py = baseY + gy;
+          if (py >= H) break;
+          const gi = glyphBase + gy;
+          const byte = (gi < font.length) ? font[gi] : 0;
+          let po = py * W + baseX;
+          for (let gx = 0; gx < gW; gx++) {
+            if (baseX + gx >= W) break;
+            this.pix[po++] = (byte >> (gW - 1 - gx)) & 1 ? fg : bg;
+          }
+        }
+      }
+    }
   }
 
   // ---- enhanceBitBlt (227) : raw BLT, tiles selected by snoop map ----------

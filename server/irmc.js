@@ -286,7 +286,9 @@ export class IrmcClient {
         const size = r.u32();
         const data = r.bytes(size);
         this.fb.bitBlt(dx, dy, dw, dh, blt, fontW, fontH, data);
-        this.emitFrame(dx, dy, dw, dh);
+        // Text mode blits a character buffer; emit the affected PIXEL region.
+        if (this.fb.isText) this.emitFrame(dx * this.fb.fontW, dy * this.fb.fontH, dw * this.fb.fontW, dh * this.fb.fontH);
+        else this.emitFrame(dx, dy, dw, dh);
         break;
       }
       case ID.EnhanceBitBlt: {

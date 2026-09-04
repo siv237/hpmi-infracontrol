@@ -351,3 +351,13 @@ Java (PixelBufferImage.enhanceBitBltHLC / EnhanceBitBlt.readBuffer):
 принудительно UI.rfb.scaleViewport = true (оба места: connect() и
 applyResizeMode()) — noVNC всегда вписывает кадр в окно с сохранением AR.
 DesktopSize уже шлётся при смене разрешения, autoscale upscale в noVNC работает.
+
+## [2026-09-04] ingest | Текстовый режим (mode 3, 640x400@0)
+Режимы VGA-текста отдают bpp=0 (напр. mode 3 = 640x400) и шлют не пиксели, а
+ASCII+attribute+font через BitBlt. Легаси (avr_irmc_s2.jar): TextMode.imageRect
+(bltType 257-264: биты 1=ascii, 2=attr, 4=font; 264 = полный дамп [ascii,attr]*
+cells) + convertAttributesToPalette — рендер глифа по шрифту с fg/bg из атрибута.
+Реализовано в server/irmc-decode.js: setVesaMode(bpp==0 -> isText), textBitBlt,
+renderTextRegion; BitBlt в text-режиме рендерит символы в pix (32bpp) с палитрой
+(VGA16 по умолчанию, overwrite при SetPalette). emitFrame — в пиксельных
+координатах. Крошечное окно/точки в загрузке устранены.
