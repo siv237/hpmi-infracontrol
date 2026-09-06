@@ -385,7 +385,17 @@ export class IrmcClient {
   afterHandshake() {
     // Keep startup minimal (video first), matching the reference: after
     // MultiUserState we do NOT force extra modes. 0xf6/0xb1/0xb2 can disturb
-    // the stream. Absolute mouse mode is enabled lazily when input is used.
+    // the stream. Mouse mode IS synced here, mirroring the legacy applet
+    // (MouseMgr.sendMouseState() on gaining full control, CConn:2231):
+    // 177 absolute=true, 178 packed byte (bit0=relative, bit4=hide) = 0.
+    // Without 177 the iRMC stays in its default RELATIVE mode and treats
+    // MouseMove(181) coordinates as deltas -> the remote cursor jumps.
+    if (this.privileges.mouse) {
+      this.sendCmd(ID.ClientAbsoluteMode);
+      this.send(Buffer.from([1]));
+      this.sendCmd(ID.ClientRelativeMode);
+      this.send(Buffer.from([0]));
+    }
     this.events.onStatus?.('after-handshake');
   }
 
@@ -398,8 +408,10 @@ export class IrmcClient {
   // ---- input ----------------------------------------------------------------
   key(scanCode, down) { this.sendCmd(ID.KeyStateChange); const b = Buffer.alloc(4); b.writeUInt16LE(scanCode, 0); b[2] = down ? 1 : 0; b[3] = 0; this.send(b); }
   mouseMove(x, y) { this.sendCmd(ID.MouseMove); const b = Buffer.alloc(8); b.writeInt32LE(x, 0); b.writeInt32LE(y, 4); this.send(b); }
-  buttonState(x, y, mask) {
-    // mask: bit0 left, bit1 right, bit2 middle (VNC buttonMask)
+  buttonState(x, y, mask, wheel = 0) {
+    // mask: bit0 left, bit1 right, bit2 middle (VNC buttonMask).
+    // wheel: 0 none, -1 up, +1 down -> legacy trackwheel position byte:
+    // ButtonState byte[2] = (64 + rotation) << 1 | pressedBit (0x80 centred).
     this.sendCmd(ID.ButtonStateAtAbsolute);
     const b = Buffer.alloc(4 + 4 + 1 + 3);
     b.writeInt32LE(x, 0); b.writeInt32LE(y, 4); b[8] = 3;
@@ -407,6 +419,7 @@ export class IrmcClient {
       const pressed = (mask & (1 << i)) !== 0;
       b[9 + i] = (pressed ? 1 : 0) | (0x80); // trackwheel centred
     }
+    if (wheel) b[11] = (((64 + wheel) & 0x7F) << 1) | (b[11] & 1);
     this.send(b);
   }
   power(action) { this.sendCmd(ID.OemPowerControlAction); this.send(Buffer.from([action & 0xFF])); }

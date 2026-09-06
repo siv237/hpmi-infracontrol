@@ -14,6 +14,9 @@ LLM Wiki проекта iRMC Viewer (этап 1). Страницы в `wiki/`, �
 - [knowledge/console-performance.md](knowledge/console-performance.md) —
   производительность bridge→noVNC: backpressure, incremental, коалесцинг,
   избежание лага ввода (диагноз + фикс 2026-09-04).
+- [knowledge/irmc-mouse.md](knowledge/irmc-mouse.md) — мышь: легаси
+  (MouseMgr, режимы 0/1/2, 177/178/179/180/181, trackwheel, курсор 236)
+  и дефекты моста (не шлётся ClientAbsoluteMode — курсор скачет).
 
 ## Хронология
 

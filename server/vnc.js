@@ -276,6 +276,10 @@ export function attachVnc(ws, sess) {
     const hid = KEYSYM_TO_HID[keysym];
     if (hid) sess && sess.key && sess.key(hid, down);
   }
+  // Legacy parity (MouseAbsoluteDelegate): MouseMove(181) on every movement,
+  // ButtonStateAtAbsolute(179) only when the button/wheel state changes.
+  // VNC wheel bits 8/16 -> iRMC trackwheel rotation -1/+1 (64±1).
+  let lastInputState = -1;
   function onPointerEvent(p) {
     if (p.length < 6) return;
     // RFB PointerEvent: [type=5][button-mask][x(u16)][y(u16)]
@@ -284,8 +288,13 @@ export function attachVnc(ws, sess) {
     const py = p.readUInt16BE(4);
     // map to iRMC button mask: bit0 left, bit1 right, bit2 middle
     const mask = ((vncMask & 1) ? 1 : 0) | ((vncMask & 4) ? 2 : 0) | ((vncMask & 2) ? 4 : 0);
+    const wheel = (vncMask & 16) ? 1 : (vncMask & 8) ? -1 : 0;
+    const state = mask | (wheel ? vncMask & 24 : 0);
     sess && sess.mouseMove && sess.mouseMove(px, py);
-    sess && sess.buttonState && sess.buttonState(px, py, mask);
+    if (state !== lastInputState) {
+      lastInputState = state;
+      sess && sess.buttonState && sess.buttonState(px, py, mask, wheel);
+    }
   }
 
   function onClientMessage(p) {

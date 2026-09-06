@@ -378,3 +378,23 @@ renderTextRegion; BitBlt в text-режиме рендерит символы в
 - Инвентарь iRMC (/api/info) выводится целиком: таблица «Информация о системе»
   (фиксированные + все оставшиеся поля), KPI (модель/серийник/BIOS/UUID),
   IPMI IP/версия BMC/имя системы — в KPI и breadcrumb.
+
+## [2026-09-06] query | Мышь: разбор легаси и диагноз «скачет курсор»
+
+Разобрана реализация мыши в легаси-вьювере (com.serverengines.mouse.*,
+MessageSender, MouseMove/ButtonState/MatroxGraphicsCursor). Итоги — в
+knowledge/irmc-mouse.md. Диагноз дефекта моста: ClientAbsoluteMode (177)
+не отправляется никогда → сервер остаётся в относительном режиме, абсолютные
+координаты noVNC трактуются как дельты (курсор «скачет», клик телепортирует).
+Второстепенное: 179 шлётся на каждое движение, колесо (биты 8/16) отбрасывается,
+курсор 236 не передаётся в noVNC. Рекомендация: слать 177(true)+178(false,false)
+после MultiUserState, 179 — по смене маски, колесо через trackwheel-байт.
+
+## [2026-09-06] project | Фикс мыши: ClientAbsoluteMode 177/178 + trackwheel
+
+server/irmc.js: afterHandshake() шлёт 177(true)+178(0x00) при наличии
+привилегии мыши (аналог легаси MouseMgr.sendMouseState()); buttonState()
+получил параметр wheel (trackwheel-байт (64±rot)<<1 на кнопке[2]).
+server/vnc.js: 179 шлётся только при смене состояния кнопок/колеса (легаси:
+181 на движение, 179 на press/release/wheel). Smoke-тест кодирования пройден;
+живая проверка на iRMC — открыта.
