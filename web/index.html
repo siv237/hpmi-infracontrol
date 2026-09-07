@@ -251,6 +251,15 @@ table.si td.v{font-weight:500;color:#333c49;white-space:pre-wrap;word-break:brea
 .fold svg{transition:transform .15s}
 @media (max-width:1000px){.two{grid-template-columns:1fr}}
 @media (max-width:820px){.split{grid-template-columns:1fr}.sidebar{display:none}}
+.ov-table{width:100%;border-collapse:collapse;font-size:13px}
+.ov-table th{font-size:11.5px;font-weight:600;color:var(--muted);text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)}
+.ov-table td{padding:7px 8px;border-bottom:1px solid var(--gray-bg);vertical-align:middle}
+.ov-empty{color:var(--faint);text-align:center;padding:14px}
+.iso-progress{margin-bottom:12px;padding:10px 14px;border:1px solid var(--border);border-radius:10px;background:var(--gray-bg)}
+.iso-prog-name{font-size:13px;font-weight:600;margin-bottom:6px}
+.iso-prog-bar{height:8px;border-radius:4px;background:#e0e4ee;overflow:hidden}
+.iso-prog-fill{height:100%;background:#2ea56d;width:0%;transition:width .15s linear}
+.iso-prog-txt{font-size:11.5px;color:var(--muted);margin-top:5px;font-variant-numeric:tabular-nums}
 </style>
 </head>
 <body>
@@ -287,6 +296,7 @@ table.si td.v{font-weight:500;color:#333c49;white-space:pre-wrap;word-break:brea
         <div class="nav-item" data-id="logs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16M6 15l6-6 4 4 4-4"/></svg><span class="lbl">Журналы</span><span class="badge">3</span></div>
         <div class="nav-item" data-id="alerts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg><span class="lbl">Оповещения</span><span class="badge">3</span></div>
         <div class="nav-item" data-id="users"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.4"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 4.5a3.4 3.4 0 0 1 0 7M17 20a6 6 0 0 0-3.2-5.3"/></svg><span class="lbl">Пользователи</span></div>
+        <div class="nav-item" data-id="iso"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3a4.5 4.5 0 0 0-1.2 8.9L9 18l3-2 3 2-1.8-6.1A4.5 4.5 0 0 0 12 3z"/></svg><span class="lbl">ISO</span></div>
         <div class="nav-item" data-id="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 9 1.7 1.7 0 0 0 3.05 14H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3.05V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9 1.7 1.7 0 0 0 20.95 10H21a2 2 0 1 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15z"/></svg><span class="lbl">Настройки</span></div>
       </div>
     </div>
@@ -463,12 +473,34 @@ table.si td.v{font-weight:500;color:#333c49;white-space:pre-wrap;word-break:brea
       </div>
 
       <!-- СТРАНИЦА: ПОЛЬЗОВАТЕЛИ -->
+      <div class="page" id="page-iso" style="display:none">
+        <div class="page-head">
+          <h1>ISO-образы</h1>
+          <span class="count-pill" id="isoCount">0</span>
+          <div class="tools">
+            <label class="icon-btn add" title="Загрузить ISO" id="isoUploadBtn" style="cursor:pointer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></label>
+            <input type="file" id="isoFile" accept=".iso,.img" style="display:none">
+            <button class="icon-btn" title="Обновить" id="isoRefreshBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button>
+          </div>
+        </div>
+        <div class="dash-card">
+          <div class="iso-progress" id="isoProgress" style="display:none">
+            <div class="iso-prog-name" id="isoProgName"></div>
+            <div class="iso-prog-bar"><div class="iso-prog-fill" id="isoProgFill" style="width:0%"></div></div>
+            <div class="iso-prog-txt" id="isoProgTxt"></div>
+          </div>
+          <table class="ov-table">
+            <thead><tr><th>Имя</th><th>Размер</th><th>Загружено</th><th></th></tr></thead>
+            <tbody id="isoRows"><tr><td colspan="4" class="ov-empty">Образов пока нет</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
       <div class="page" id="page-users" style="display:none">
         <div class="page-head">
           <h1>Пользователи</h1>
           <span class="count-pill" id="userCount">0</span>
-          <div class="tools">
-            <button class="tool-btn primary" id="userAddBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Добавить пользователя</button>
+          <div class="tools">            <button class="tool-btn primary" id="userAddBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Добавить пользователя</button>
           </div>
         </div>
         <div class="page-note">Права пока общие, деление на две роли: <b>администратор</b> управляет серверами и пользователями, <b>пользователь</b> только смотрит добавленное.</div>
@@ -856,6 +888,69 @@ $('refreshInfoBtn').onclick=()=>{ $('actionsMenu').classList.remove('show'); if(
 
 // ---- профиль и сессия ------------------------------------------------------
 let editingUserId=null;
+async function loadIso(){
+  const j=await api('/api/iso');
+  if(!j.ok)return;
+  const rows=(j.images||[]).map(img=>{
+    const sz=img.size!=null?(img.size>=1073741824?(img.size/1073741824).toFixed(2)+' ГБ':(img.size>=1048576?(img.size/1048576).toFixed(1)+' МБ':(img.size>=1024?(img.size/1024).toFixed(0)+' КБ':img.size+' Б'))):'—';
+    const ts=img.ts?new Date(img.ts).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'—';
+    return '<tr><td><b>'+esc(img.name)+'</b></td><td>'+sz+'</td><td>'+ts+'</td>'
+      +'<td style="white-space:nowrap">'
+      +(isAdmin()?'<button class="icon-btn" title="Переименовать" onclick="isoRename(\''+esc(img.id)+'\',\''+esc(String(img.name).replace(/'/g,''))+'\')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></button>':'')
+      +(isAdmin()?'<button class="icon-btn" title="Удалить" onclick="isoDelete(\''+esc(img.id)+'\',\''+esc(String(img.name).replace(/'/g,''))+'\')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/></svg></button>':'')
+      +'</td></tr>';
+  }).join('')||'<tr><td colspan="4" class="ov-empty">Образов пока нет</td></tr>';
+  $('isoRows').innerHTML=rows;
+  $('isoCount').textContent=(j.images||[]).length;
+}
+async function isoDelete(id,name){
+  if(!isAdmin()){snack('Только администратор');return;}
+  if(!confirm('Удалить ISO «'+name+'»?'))return;
+  const j=await api('/api/iso/'+encodeURIComponent(id),{method:'DELETE'});
+  if(j.okResp===false)return;
+  snack('Удалено'); loadIso();
+}
+async function isoRename(id,cur){
+  if(!isAdmin()){snack('Только администратор');return;}
+  const nn=prompt('Новое имя:',cur); if(!nn||nn===cur)return;
+  const j=await api('/api/iso/'+encodeURIComponent(id),{method:'PATCH',body:JSON.stringify({name:nn})});
+  if(j.okResp===false)return;
+  snack('Переименовано'); loadIso();
+}
+async function isoUpload(file){
+  if(!isAdmin()){snack('Только администратор может загружать ISO');return;}
+  if(!file)return;
+  const prog=$('isoProgress'), fill=$('isoProgFill'), txt=$('isoProgTxt');
+  $('isoProgName').textContent='Загрузка: '+file.name;
+  prog.style.display='block';
+  fill.style.width='0%';
+  txt.textContent='0% · 0 МБ';
+  try{
+    const data=await new Promise((resolve,reject)=>{
+      const xhr=new XMLHttpRequest();
+      xhr.open('POST','/api/iso?name='+encodeURIComponent(file.name),true);
+      const h=sessionHeaders({});
+      for(const k in h) xhr.setRequestHeader(k,h[k]);
+      xhr.upload.onprogress=(e)=>{ if(e.lengthComputable&&e.total){ const p=Math.round(100*e.loaded/e.total); fill.style.width=p+'%'; txt.textContent=p+'% · '+fmtMB(e.loaded)+' / '+fmtMB(e.total); } };
+      xhr.onload=()=>{ try{ resolve(JSON.parse(xhr.responseText)); }catch(e){ reject(e); } };
+      xhr.onerror=()=>reject(new Error('сеть'));
+      xhr.onabort=()=>reject(new Error('отмена'));
+      xhr.send(file);
+    });
+    if(data.status===401)return;
+    if(data.ok){ txt.textContent='Загрузка завершена ✓'; addEvent('info','Загружен ISO · '+file.name); await new Promise(r=>setTimeout(r,700)); loadIso(); }
+    else { txt.textContent='Ошибка: '+((data.error||'').slice(0,80)); }
+  }catch(e){
+    txt.textContent='Сбой: '+String(e&&e.message||e);
+  }finally{
+    setTimeout(()=>{ prog.style.display='none'; },4000);
+  }
+}
+function fmtMB(n){ return (n/1048576).toFixed(1)+' МБ'; }
+$('isoFile').onchange=(e)=>{ const f=e.target.files&&e.target.files[0]; if(f)isoUpload(f); e.target.value=''; };
+$('isoUploadBtn').onclick=()=>{ if(!isAdmin()){snack('Только администратор');return;} $('isoFile').click(); };
+$('isoRefreshBtn').onclick=()=>loadIso();
+
 async function loadUsers(){
   const j=await api('/api/users');
   users=j.users||[];
@@ -1167,8 +1262,9 @@ function showPage(id){
   document.querySelector('.search').style.display=(id==='servers')?'':'none';
   try{ localStorage.setItem('ui.page',id); }catch{}
   if(id==='users')loadUsers();
+  if(id==='iso')loadIso();
 }
-const IMPLEMENTED=new Set(['servers','users']);
+const IMPLEMENTED=new Set(['servers','users','iso']);
 document.querySelectorAll('.nav-item').forEach(n=>{
   n.onclick=()=>{
     const id=n.getAttribute('data-id');

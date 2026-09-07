@@ -18,6 +18,7 @@ import { discover, getSession, inventory, parseInventory } from './discover.js';
 import { probe } from './probe.js';
 import { attachVnc } from './vnc.js';
 import { encodePng, saveScreenshot } from './png.js';
+import * as iso from './iso.js';
 
 const PORT = Number(process.env.PORT || 1845);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -406,6 +407,57 @@ const server = http.createServer(async (req, res) => {
       none: servers.filter((s2) => s2.status === 'none').length,
     };
     return json(res, 200, { ok: true, summary, servers });
+  }
+
+  // === Хранилище ISO (п.10.2): загрузка/список/удаление/переименование/раздача
+  // Список образов
+  if (url.pathname === '/api/iso' && req.method === 'GET') {
+    try { return json(res, 200, { ok: true, images: await iso.listImages() }); }
+    catch (e) { return json(res, 500, { ok: false, error: String(e.message || e) }); }
+  }
+  // Загрузка образа (admin): тело = бинарник, имя в query ?name=
+  if (url.pathname === '/api/iso' && req.method === 'POST') {
+    if (req.user.role !== 'admin') return json(res, 403, { ok: false, error: 'права администратора' });
+    let name = url.searchParams.get('name') || '';
+    if (!name) {
+      const cd = req.headers['content-disposition'] || '';
+      const m = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(cd);
+      name = m ? decodeURIComponent(m[1]) : '';
+    }
+    if (!name.trim()) return json(res, 400, { ok: false, error: 'укажите имя (name)' });
+    try {
+      const done = await iso.uploadStream(req, { name, signal: res.req?.req });
+      await storage.addEvent('info', `Загружен ISO · ${done.name} (${done.size} байт)`, null);
+      return json(res, 200, { ok: true, image: done });
+    } catch (e) { return json(res, 400, { ok: false, error: String(e.message || e) }); }
+  }
+  // Переименование
+  if (url.pathname.startsWith('/api/iso/') && req.method === 'PATCH') {
+    if (req.user.role !== 'admin') return json(res, 403, { ok: false, error: 'права администратора' });
+    const id = decodeURIComponent(url.pathname.slice('/api/iso/'.length));
+    const body = await readJson(req, res);
+    if (!body || !body.name) return json(res, 400, { ok: false, error: 'name required' });
+    const m = await iso.renameImage(id, body.name);
+    if (!m) return json(res, 404, { ok: false, error: 'не найдено' });
+    return json(res, 200, { ok: true, name: m.name });
+  }
+  // Удаление
+  if (url.pathname.startsWith('/api/iso/') && req.method === 'DELETE') {
+    if (req.user.role !== 'admin') return json(res, 403, { ok: false, error: 'права администратора' });
+    const id = decodeURIComponent(url.pathname.slice('/api/iso/'.length));
+    const ok = await iso.deleteImage(id);
+    return json(res, ok ? 200 : 404, { ok });
+  }
+  // Раздача байт образа (read-only) — для будущего монтирования на iRMC
+  if (url.pathname.startsWith('/api/iso/') && req.method === 'GET') {
+    const t = url.pathname.slice('/api/iso/'.length);
+    if (!t.endsWith('/bytes')) return json(res, 404, { ok: false, error: 'not found' });
+    const id = decodeURIComponent(t.slice(0, -'/bytes'.length));
+    const img = await iso.openImage(id);
+    if (!img) return json(res, 404, { ok: false, error: 'не найдено' });
+    res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': img.size, 'cache-control': 'no-store' });
+    img.stream.pipe(res);
+    return;
   }
 
   if (url.pathname === '/api/discover' && req.method === 'POST') {
