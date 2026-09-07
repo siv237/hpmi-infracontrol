@@ -6,7 +6,6 @@
 
 import http from 'node:http';
 import net from 'node:net';
-import { networkInterfaces } from 'node:os';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -21,6 +20,7 @@ import { probe } from './probe.js';
 import { attachVnc } from './vnc.js';
 import { encodePng, saveScreenshot } from './png.js';
 import * as iso from './iso.js';
+import * as m2 from './m2.js';
 
 const PORT = Number(process.env.PORT || 1845);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -257,7 +257,7 @@ const server = http.createServer(async (req, res) => {
       await startSession(sess, stored.host, stored.username, stored.password || '', stored.port, stored.secure);
       await waitLive(sess, 10000);
       // если у сервера есть активный маунт — дослать 153 по свежей сессии
-      try { const m = await storage.getMount(body.serverId); if (m) realMount(body.serverId, stored.host, m); } catch {}
+      try { const m = await storage.getMount(body.serverId); if (m) realMount(stored, m.isoId).catch(() => {}); } catch {}
       return json(res, 200, { ok: true, token: sess.token, name: sess.name, host: sess.host, width: sess.width, height: sess.height, state: sess.state });
     } catch (e) {
       sess.manualClose = true; // первичный коннект не удался — не крутим реконнекты
@@ -465,56 +465,18 @@ const server = http.createServer(async (req, res) => {
   }
 
   // === Монтирование ISO: состояние «что примонтировано» (п.10/10.5) ===
-  // Реальный проброс: наш IP, приёмный сервер 5901 (отдаём ISO по запросу
-  // iRMC), команды 153/154 по активной KVM-сессии сервера.
-  function localIPv4() {
-    for (const list of Object.values(networkInterfaces())) {
-      for (const i of list || []) {
-        if (!i.internal && i.family === 'IPv4') return i.address;
-      }
-    }
-    return '127.0.0.1';
-  }
-  let isoStoreServer = null;
-  function ensureIsoServer() {
-    if (isoStoreServer) return;
-    isoStoreServer = net.createServer((sock) => {
-      // какой образ отдать: берём самый свежий активный маунт
-      (async () => {
-        const mounts = await storage.getMounts();
-        let key = null, best = null;
-        for (const [k, m] of Object.entries(mounts)) if (!best || m.ts > best.ts) { best = m; key = k; }
-        if (!best) { sock.destroy(); return; }
-        const img = await iso.openImage(best.isoId);
-        if (!img) { sock.destroy(); return; }
-        img.stream.on('error', () => sock.destroy());
-        sock.on('error', () => img.stream.destroy());
-        img.stream.pipe(sock);
-      })().catch(() => sock.destroy());
+  // Реальный проброс: движок M2 из легаси-jar (server/m2.js) — он сам
+  // соединяется с iRMC и отдаёт образ как SCSI CD. KVM-сессия для этого
+  // не нужна (в легаси Java команды 153/154 по KVM не шлёт вовсе).
+  function realMount(srv, isoId) {
+    return m2.share({
+      host: srv.host,
+      port: srv.port || 80, // в легаси m_storagePort = HTTP-порт iRMC
+      sharePath: iso.isoPath(isoId),
     });
-    isoStoreServer.on('error', () => {});
-    try { isoStoreServer.listen(5901, '0.0.0.0'); } catch {}
   }
-  function sessionForServer(host) {
-    const token = sessionsByHost.get(host);
-    const s = token && sessions.get(token);
-    return (s && s.cli) ? s.cli : null;
-  }
-  function realMount(serverId, host, isoMeta) {
-    ensureIsoServer();
-    const cli = sessionForServer(host);
-    if (!cli) return false; // реальный проброс возможен при активной сессии
-    cli.storageClientConnect({
-      ip: Buffer.from(localIPv4().split('.').map(Number)),
-      port: 5901,
-      shareType: IrmcClient.DT_CD_ISO_IMAGE_RO,
-      sharePath: isoMeta.name,
-    });
-    return true;
-  }
-  function realUnmount(host) {
-    const cli = sessionForServer(host);
-    if (cli) cli.storageClientDisconnect();
+  function realUnmount() {
+    m2.unshare();
   }
   // Список монтирований (все серверы) — с именами серверов/образов
   if (url.pathname === '/api/mounts' && req.method === 'GET') {
@@ -539,7 +501,7 @@ const server = http.createServer(async (req, res) => {
     if (!img) return json(res, 404, { ok: false, error: 'ISO не найден' });
     const stale = img.stream; try { stale.destroy(); } catch { }
     const m = await storage.setMount(body.serverId, img.meta, req.user?.login || null);
-    const real = realMount(body.serverId, srv.host, img.meta);
+    const real = await realMount(srv, body.isoId).catch((e) => { console.error('[mount] m2 share failed:', e.message); return false; });
     await storage.addEvent('info', `Примонтирован ISO «${img.meta.name}» к ${srv.name || srv.host}` + (real ? '' : ' (ожидает открытой сессии)'), body.serverId);
     return json(res, 200, { ok: true, mount: m, real });
   }
@@ -551,7 +513,7 @@ const server = http.createServer(async (req, res) => {
     if (m) {
       const list = await listServers(false);
       const srv = list.find((s) => s.id === serverId);
-      if (srv) realUnmount(srv.host);
+      if (srv) realUnmount();
     }
     const ok = await storage.clearMount(serverId);
     if (ok) await storage.addEvent('info', 'Отмонтирован ISO', serverId);

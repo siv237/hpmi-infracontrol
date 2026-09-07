@@ -434,7 +434,7 @@ export class IrmcClient {
   static DT_CD_ISO_IMAGE = 11;
   static DT_CD_ISO_IMAGE_RO = 139;
   static DT_DVD_ISO_IMAGE = 12;
-  static unitStr(s, pad = 512) {
+  unitStr(s, pad = 512) {
     // Unicode (UTF-16BE) строка, дополненная нулями до pad байт
     const b = Buffer.alloc(pad);
     const enc = Buffer.from(String(s ?? ''), 'utf16le');

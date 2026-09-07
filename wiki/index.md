@@ -19,6 +19,9 @@ LLM Wiki проекта iRMC Viewer (этап 1). Страницы в `wiki/`, �
   и дефекты моста (не шлётся ClientAbsoluteMode — курсор скачет).
 - [knowledge/test-accounts.md](knowledge/test-accounts.md) — тестовые
   учётки (логины/пароли для headless-проверок и curl).
+- [knowledge/irmc-storage.md](knowledge/irmc-storage.md) — проброс ISO:
+  нативный движок M2 (локальный протокол Java↔M2, последовательность
+  M2↔iRMC, формат URSStorage), почему 153 без M2 не доставляет данные.
 
 ## Хронология
 

@@ -106,3 +106,8 @@ export async function openImage(id) {
   const s = await stat(file);
   return { meta: m, size: s.size, stream: createReadStream(file) };
 }
+
+// Абсолютный путь файла образа на диске (для движка монтирования M2)
+export function isoPath(id) {
+  return path.join(ISO_DIR, id);
+}
