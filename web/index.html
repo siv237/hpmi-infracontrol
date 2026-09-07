@@ -569,6 +569,8 @@ let authToken=null;
 try{ authToken=localStorage.getItem('auth.token')||null; }catch{}
 const dbgStatus={};   // serverId -> 'on'|'err'
 const dbgInv={};      // serverId -> inventory map
+const dbgLastKnown={}; // serverId -> ts последнего снимка из базы
+const dbgPower={};    // serverId -> 'on'|'off'|'unknown'
 
 const ROLE_LABEL={admin:'Администратор',user:'Пользователь'};
 
@@ -726,7 +728,7 @@ function renderDetail(){
     $('kpiVer').textContent='';
   }
   renderSI(inv);
-  $('invState').textContent=st==='on'?'данные получены':(st==='err'?'сервер недоступен':st==='off'?'проверка…':'');
+  $('invState').textContent=(st==='on'?'данные получены':(st==='err'?'сервер недоступен':(st==='off'&&dbgLastKnown[sel]?'данные из базы':'проверка…')))+(dbgLastKnown[sel]?(' · снимок от '+fmtDump(dbgLastKnown[sel])):'');;
 }
 
 function trustKeys(inv){ return inv; }
@@ -766,22 +768,53 @@ function renderSI(inv){
 }
 
 async function loadInv(id){
+  const s=servers.find(x=>x.id===id);
+  const prev=dbgStatus[id];
+  // 1) СРАЗУ показываем последний снимок из базы (offline-first)
+  try{
+    const lk=await api('/api/last-known/'+encodeURIComponent(id),{_noKick:true});
+    if(id!==sel)return;
+    if(lk.ok&&lk.inventory&&Object.keys(lk.inventory).length){
+      dbgInv[id]=lk.inventory; dbgLastKnown[id]=lk.ts;
+      if(!dbgStatus[id]){dbgStatus[id]='off';renderDetail();renderEvents();}
+    }
+  }catch{}
+  if(id!==sel)return;
+  // 2) Онлайн-обновление: при успехе перезаписать, иначе оставить базу
   const j=await api('/api/info',{method:'POST',body:JSON.stringify({serverId:id})});
   if(j.status===401)return; // сессия истекла — показывается страница входа
   if(id!==sel)return;
-  const s=servers.find(x=>x.id===id);
-  const prev=dbgStatus[id];
   if(j.ok){
     dbgStatus[id]='on';
     dbgInv[id]=j.inventory||j.inv||{};
+    dbgPower[id]=j.powerState||'unknown';
     if(prev!=='on')addEvent('ok','Данные iRMC получены'+(s?(' · '+(s.name||s.host)):''));
+    (j.configChanges||[]).forEach(c=>addEvent('warn','Изменение конфигурации · '+c.field+': '+c.from+' → '+c.to));
   } else {
     dbgStatus[id]='err';
-    dbgInv[id]={};
+    if(!dbgLastKnown[id]){ dbgInv[id]=null; renderDetail(); } // нет снимка — честно «нет данных»
     if(prev!=='err')addEvent('err','iRMC недоступен'+(s?(' · '+(s.name||s.host)):'')+((j.error&&typeof j.error==='string')?(' — '+j.error.slice(0,80)):''));
   }
   renderDetail();
   renderEvents();
+}
+
+function fmtDump(iso){
+  if(!iso)return '—';
+  const d=new Date(iso);
+  return d.toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+}
+async function showVersionHistory(id){
+  if(!id)return;
+  const j=await api('/api/versions?serverId='+encodeURIComponent(id)+'&limit=50');
+  if(!j.ok || !(j.versions||[]).length){ snack('История версий пуста'); return; }
+  const rows=(j.versions||[]).map(v=>{
+    const f=Object.entries(v.versions||{}).map(([k,val])=>'<div class="vh-item"><span class="vh-k">'+esc(k)+'</span><span class="vh-v">'+esc(val)+'</span></div>');
+    return '<div class="vh-row"><div class="vh-ts">'+fmtDump(v.ts)+(v.by?(' · '+esc(v.by)):'')+'</div>'+f.join('')+'</div>';
+  }).join('');
+  try{ alert('История версий:\n\n'+rows.replace(/<[^>]+>/g,'')); }catch{}
+  const s=servers.find(x=>x.id===id);
+  addEvent('info','Просмотр истории версий'+(s?(' · '+(s.name||s.host)):''));
 }
 
 // ---- события (реальный журнал сессии) ------------------------------------
@@ -1132,6 +1165,7 @@ function showPage(id){
   document.querySelectorAll('.page').forEach(p=>p.style.display='none');
   const p=$('page-'+id); if(p)p.style.display='block';
   document.querySelector('.search').style.display=(id==='servers')?'':'none';
+  try{ localStorage.setItem('ui.page',id); }catch{}
   if(id==='users')loadUsers();
 }
 const IMPLEMENTED=new Set(['servers','users']);
@@ -1169,7 +1203,10 @@ async function enterApp(user){
   me=user; hideLogin();
   await loadUiConfig();
   renderUserBox(); applyPerms();
-  showPage('servers');
+  // восстановить последнюю открытую вкладку (F5 не сбрасывает на «Серверы»)
+  let restorePage='servers';
+  try{ const p=localStorage.getItem('ui.page'); if(p&&IMPLEMENTED.has(p))restorePage=p; }catch{}
+  showPage(restorePage);
   load(); loadUsers();
 }
 $('l_enter').onclick=async()=>{

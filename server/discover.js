@@ -18,15 +18,24 @@ function md5(s) { return crypto.createHash('md5').update(s).digest('hex'); }
 function randomHex(n) { return crypto.randomBytes(n).toString('hex').slice(0, n); }
 
 // One HTTP(S) GET. Returns { status, headers, body, auth }.
+// Тело декодируется по charset из Content-Type (дефолт UTF-8 — iRMC S2
+// отдаёт страницы в UTF-8; latin1 ломал кириллицу в инвентаре).
 function get(secure, host, port, path, headers = {}) {
   const mod = secure ? https : http;
   const u = new URL(`${secure ? 'https' : 'http'}://${host}:${port}${path}`);
   return new Promise((resolve, reject) => {
     const req = mod.get(u, secure ? { ...permissiveTlsOptions(), headers } : { headers }, (res) => {
-      let body = '';
-      res.setEncoding('latin1');
-      res.on('data', (c) => { body += c; if (body.length > 2e6) req.destroy(); });
-      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }));
+      const chunks = [];
+      res.on('data', (c) => { if (Buffer.isBuffer(c)) chunks.push(c); else chunks.push(Buffer.from(c)); });
+      res.on('end', () => {
+        const buf = Buffer.concat(chunks);
+        const m = /charset=([\w-]+)/i.exec(res.headers['content-type'] || '');
+        let enc = (m && m[1] ? m[1] : 'utf8').toLowerCase();
+        if (enc === 'utf-8') enc = 'utf8';
+        let body;
+        try { body = buf.toString(enc); } catch { body = buf.toString('utf8'); }
+        resolve({ status: res.statusCode, headers: res.headers, body });
+      });
     });
     req.on('error', reject);
     req.setTimeout(6000, () => { req.destroy(new Error('timeout')); });

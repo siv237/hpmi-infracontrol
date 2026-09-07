@@ -23,6 +23,10 @@ const PORT = Number(process.env.PORT || 1845);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
 
+// Офлайн-хранилище (слой A, без мониторинга): снимки last-known, события,
+// история версий — только по факту подключения. data/storage.json (вне git).
+const storage = await import('./storage.js');
+
 // Live console sessions: token -> { cli, listeners, name, host, state }
 const sessions = new Map();
 const sessionsByHost = new Map(); // host -> token (one active console per host)
@@ -329,13 +333,79 @@ const server = http.createServer(async (req, res) => {
     // Prefer authenticated inventory (model/serial/BIOS/OS), fall back to probe.
     try {
       const inv = await inventory(cfg);
-      return json(res, 200, { ok: true, inventory: inv.inventory, ...inv });
+      const invMap = inv.inventory || {};
+      let configChanges = [];
+      if (body.serverId) {
+        // фактическое подключение: снимок + история версий + событие
+        configChanges = (await storage.saveSnapshot(body.serverId, invMap)).changes;
+        await storage.recordVersionSnapshot(body.serverId, invMap, req.user?.login || null);
+        await storage.addEvent('info', `Данные iRMC получены (${cfg.name || cfg.host})`, body.serverId);
+        for (const c of configChanges) await storage.addEvent('warn', `Изменение конфигурации · ${c.field}: ${c.from} → ${c.to}`, body.serverId);
+      }
+      return json(res, 200, { ok: true, inventory: invMap, configChanges, ...inv });
     } catch {
       try {
         const p = await probe(cfg);
         return json(res, 200, p);
       } catch (e) { return json(res, 200, { ok: false, error: String(e.message || e) }); }
     }
+  }
+
+  // Офлайн-данные: последний снимок инвентаря сервера (слой A)
+  if (url.pathname.startsWith('/api/last-known/') && req.method === 'GET') {
+    const id = decodeURIComponent(url.pathname.slice('/api/last-known/'.length));
+    const lk = await storage.getLastKnown(id);
+    if (!lk) return json(res, 404, { ok: false, error: 'нет сохранённых данных' });
+    return json(res, 200, { ok: true, ts: lk.ts, inventory: lk.inventory });
+  }
+
+  // Журнал изменений конфигурации
+  if (url.pathname === '/api/changes' && req.method === 'GET') {
+    const serverId = url.searchParams.get('serverId') || null;
+    const limit = Number(url.searchParams.get('limit')) || 100;
+    return json(res, 200, { ok: true, changes: await storage.getChanges(serverId, limit) });
+  }
+
+  // События подключений/обновлений данных
+  if (url.pathname === '/api/events' && req.method === 'GET') {
+    const limit = Math.min(Number(url.searchParams.get('limit')) || 100, 500);
+    const serverId = url.searchParams.get('serverId') || null;
+    return json(res, 200, { ok: true, events: await storage.getEvents(limit, serverId) });
+  }
+
+  // История версий оборудования по серверу
+  if (url.pathname === '/api/versions' && req.method === 'GET') {
+    const serverId = url.searchParams.get('serverId');
+    if (!serverId) return json(res, 400, { ok: false, error: 'serverId required' });
+    const limit = Math.min(Number(url.searchParams.get('limit')) || 50, 500);
+    return json(res, 200, { ok: true, serverId, versions: await storage.getVersions(serverId, limit) });
+  }
+
+  // Обзор (п.1): серверы + последний опрос (когда/статус) — из базы, без мониторинга
+  if (url.pathname === '/api/overview' && req.method === 'GET') {
+    const list = await listServers(false);
+    const servers = [];
+    for (const s of list) {
+      const lk = await storage.getLastKnown(s.id);
+      let status = 'none';
+      if (lk && lk.inventory) {
+        const ps = String(lk.inventory['Power LED'] || '').toLowerCase();
+        status = ps.includes('off') ? 'off' : 'on';
+      }
+      servers.push({
+        id: s.id, name: s.name, host: s.host, group: s.group || '',
+        lastCheck: lk ? lk.ts : null,
+        status,
+        inventoryCount: lk && lk.inventory ? Object.keys(lk.inventory).length : 0,
+      });
+    }
+    const summary = {
+      total: servers.length,
+      on: servers.filter((s2) => s2.status === 'on').length,
+      off: servers.filter((s2) => s2.status === 'off').length,
+      none: servers.filter((s2) => s2.status === 'none').length,
+    };
+    return json(res, 200, { ok: true, summary, servers });
   }
 
   if (url.pathname === '/api/discover' && req.method === 'POST') {
@@ -598,3 +668,18 @@ server.listen(PORT, () => {
   console.log('Left panel: servers. Right: details + Launch console (noVNC).');
   console.log('GET /api/servers lists stored servers (credentials encrypted at rest).');
 });
+
+// Graceful shutdown (слой A): при остановке закрываем все консольные
+// сессии к iRMC (ClientDisconnect 0xd8), чтобы не оставлять висящие сессии.
+let shuttingDown = false;
+function shutdownAllSessions() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  for (const sess of [...sessions.values()]) {
+    try { closeSession(sess); } catch { }
+  }
+  try { wss.close(); } catch { }
+}
+process.on('SIGINT', () => { shutdownAllSessions(); process.exit(0); });
+process.on('SIGTERM', () => { shutdownAllSessions(); process.exit(0); });
+process.on('beforeExit', shutdownAllSessions);
