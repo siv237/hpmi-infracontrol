@@ -12,6 +12,7 @@ import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { IrmcClient, testIrmc } from './irmc.js';
 import { listServers, saveServer, deleteServer, getServer, updateServer } from './store.js';
+import { listUsers, saveUser, updateUser, deleteUser, findByLogin, verifyPassword, updatePassword } from './users-store.js';
 import { discover, getSession, inventory, parseInventory } from './discover.js';
 import { probe } from './probe.js';
 import { attachVnc } from './vnc.js';
@@ -24,6 +25,9 @@ const ROOT = path.join(__dirname, '..');
 // Live console sessions: token -> { cli, listeners, name, host, state }
 const sessions = new Map();
 const sessionsByHost = new Map(); // host -> token (one active console per host)
+
+// Сессии входа: токен -> userId (см. /api/login, authUser)
+const authSessions = new Map();
 
 function createSession(name, host) {
   const token = randomUUID();
@@ -118,6 +122,16 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
 
   // --- API ---------------------------------------------------------------
+
+  // Авторизация: все /api/* требуют входа (сессия из Authorization/X-Session),
+  // кроме страницы входа и выхода. Роль текущего пользователя — req.user.
+  const AUTH_OPEN = ['/api/login', '/api/logout', '/api/me', '/api/me/password'];
+  if (url.pathname.startsWith('/api/') && !AUTH_OPEN.includes(url.pathname)) {
+    const au = await authUser(req);
+    if (!au) return json(res, 401, { ok: false, error: 'требуется вход' });
+    req.user = au;
+  }
+
   if (url.pathname === '/api/test' && req.method === 'POST') {
     const body = await readJson(req, res);
     if (!body) return;
@@ -212,6 +226,37 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { ok: true, state: s.state, width: s.width, height: s.height, fbNonZero, status: s.status.slice(-30), error: s.error });
   }
 
+  // Ввод с KVM-тулбара (Ctrl/Alt/Del/Esc): список шагов {c: hidCode, d: down},
+  // исполняется по порядку с паузой ~25 мс между шагами, чтобы iRMC успел
+  // зарегистрировать нажатие/отпускание (например, Ctrl+Alt+Del).
+  if (url.pathname === '/api/keys' && req.method === 'POST') {
+    const body = await readJson(req, res);
+    if (!body) return;
+    const s = sessions.get(body.token);
+    if (!s || !s.cli) return json(res, 404, { ok: false, error: 'no session' });
+    const steps = Array.isArray(body.steps) ? body.steps.slice(0, 64) : [];
+    (async () => {
+      for (const st of steps) {
+        if (!st || typeof st.c !== 'number') continue;
+        try { s.key(st.c, !!st.d); } catch {}
+        await new Promise((r) => setTimeout(r, 25));
+      }
+    })();
+    return json(res, 200, { ok: true, steps: steps.length });
+  }
+
+  // Закрыть консольную сессию: освобождает iRMC (ClientDisconnect 0xd8),
+  // чтобы следующий /api/connect поднимал свежую консоль, а не натыкался
+  // на «одну активную консоль».
+  if (url.pathname === '/api/disconnect' && req.method === 'POST') {
+    const body = await readJson(req, res);
+    if (!body) return;
+    const s = sessions.get(body.token);
+    if (!s) return json(res, 200, { ok: true, gone: true });
+    closeSession(s);
+    return json(res, 200, { ok: true });
+  }
+
   if (url.pathname === '/api/info' && req.method === 'POST') {
     const body = await readJson(req, res);
     if (!body) return;
@@ -242,12 +287,97 @@ const server = http.createServer(async (req, res) => {
     } catch (e) { return json(res, 200, { ok: false, error: String(e.message || e) }); }
   }
 
+  // --- авторизация --------------------------------------------------------
+  // Сессии в памяти: токен -> userId. Токен приходит в заголовке
+  // Authorization: Bearer / X-Session (добавляет фронт). Дальше все /api/*
+  // требуют входа; мутации — роли admin.
+  async function authUser(req) {
+    const h = req.headers['authorization'] || '';
+    const token = h.startsWith('Bearer ') ? h.slice(7) : (req.headers['x-session'] || null);
+    if (!token) return null;
+    const uid = authSessions.get(token);
+    if (!uid) return null;
+    try {
+      const u = (await listUsers()).find((x) => x.id === uid);
+      return u && u.enabled ? u : null;
+    } catch { return null; }
+  }
+
+  if (url.pathname === '/api/login' && req.method === 'POST') {
+    const body = await readJson(req, res);
+    if (!body) return;
+    const u = await findByLogin(body.login);
+    const okP = !!(u && u.enabled && (await verifyPassword(u.id, body.password || '')));
+    if (!okP) return json(res, 200, { ok: false, error: 'Неверный логин или пароль' });
+    const token = randomUUID();
+    authSessions.set(token, u.id);
+    return json(res, 200, { ok: true, token, user: u });
+  }
+
+  if (url.pathname === '/api/me' && req.method === 'GET') {
+    const u = await authUser(req);
+    if (!u) return json(res, 401, { ok: false, error: 'требуется вход' });
+    return json(res, 200, { ok: true, user: u });
+  }
+
+  if (url.pathname === '/api/logout' && req.method === 'POST') {
+    const h = req.headers['authorization'] || '';
+    const token = h.startsWith('Bearer ') ? h.slice(7) : req.headers['x-session'];
+    if (token) authSessions.delete(token);
+    return json(res, 200, { ok: true });
+  }
+
+  if (url.pathname === '/api/me/password' && req.method === 'POST') {
+    const u = await authUser(req);
+    if (!u) return json(res, 401, { ok: false, error: 'требуется вход' });
+    const body = await readJson(req, res);
+    if (!body) return;
+    const r = await updatePassword(u.id, body.current, body.next);
+    return json(res, r.ok ? 200 : 400, r);
+  }
+
+  // --- пользователи и права ----------------------------------------------
+  if (url.pathname === '/api/users' && req.method === 'GET') {
+    try { return json(res, 200, { ok: true, users: await listUsers() }); }
+    catch (e) { return json(res, 500, { ok: false, error: String(e.message || e) }); }
+  }
+
+  if (url.pathname === '/api/users' && req.method === 'POST') {
+    if (req.user.role !== 'admin') return json(res, 403, { ok: false, error: 'требуются права администратора' });
+    const body = await readJson(req, res);
+    if (!body) return;
+    try { return json(res, 200, { ok: true, user: await saveUser(body) }); }
+    catch (e) { return json(res, 400, { ok: false, error: String(e.message || e) }); }
+  }
+
+  if (url.pathname.startsWith('/api/users/') && req.method === 'PUT') {
+    if (req.user.role !== 'admin') return json(res, 403, { ok: false, error: 'требуются права администратора' });
+    const id = decodeURIComponent(url.pathname.slice('/api/users/'.length));
+    const body = await readJson(req, res);
+    if (!body) return;
+    try {
+      const u = await updateUser(id, body);
+      if (!u) return json(res, 404, { ok: false, error: 'user not found' });
+      return json(res, 200, { ok: true, user: u });
+    } catch (e) { return json(res, 400, { ok: false, error: String(e.message || e) }); }
+  }
+
+  if (url.pathname.startsWith('/api/users/') && req.method === 'DELETE') {
+    if (req.user.role !== 'admin') return json(res, 403, { ok: false, error: 'требуются права администратора' });
+    const id = decodeURIComponent(url.pathname.slice('/api/users/'.length));
+    try {
+      const r = await deleteUser(id, req.user.id);
+      return json(res, r.ok ? 200 : 400, r);
+    } catch (e) { return json(res, 500, { ok: false, error: String(e.message || e) }); }
+  }
+
   if (url.pathname === '/api/servers' && req.method === 'GET') {
     try { return json(res, 200, { servers: await listServers(false) }); }
     catch (e) { return json(res, 500, { ok: false, error: String(e.message || e) }); }
   }
 
   if (url.pathname === '/api/servers' && req.method === 'POST') {
+    if (req.user.role !== "admin") return json(res, 403, { ok: false, error: "требуются права администратора" });
     const body = await readJson(req, res);
     if (!body) return;
     try {
@@ -257,6 +387,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname.startsWith('/api/servers/') && req.method === 'PUT') {
+    if (req.user.role !== "admin") return json(res, 403, { ok: false, error: "требуются права администратора" });
     const id = decodeURIComponent(url.pathname.slice('/api/servers/'.length));
     const body = await readJson(req, res);
     if (!body) return;
@@ -268,12 +399,15 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname.startsWith('/api/servers/') && req.method === 'DELETE') {
+    if (req.user.role !== "admin") return json(res, 403, { ok: false, error: "требуются права администратора" });
     const id = decodeURIComponent(url.pathname.slice('/api/servers/'.length));
     try {
       const ok = await deleteServer(id);
       return json(res, ok ? 200 : 404, { ok });
     } catch (e) { return json(res, 500, { ok: false, error: String(e.message || e) }); }
   }
+
+  if (url.pathname === '/favicon.ico') return plain(res, '', 204);
 
   if (url.pathname.startsWith('/novnc/')) {
     const rel = url.pathname.slice('/novnc/'.length) || 'vnc.html';

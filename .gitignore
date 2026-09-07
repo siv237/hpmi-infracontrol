@@ -4,6 +4,9 @@ node_modules/
 # private runtime data: AES key + stored servers with credentials
 data/
 
+# локальная страница wiki с тестовыми учётками (пароли не публикуем)
+wiki/knowledge/test-accounts.md
+
 # runtime screenshots
 screenshots/
 
