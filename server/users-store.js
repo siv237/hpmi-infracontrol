@@ -1,18 +1,16 @@
 // Хранилище пользователей (редактор «Пользователи»).
-// Пароли хранятся шифрованно так же, как креды серверов: AES-256-GCM
-// (общий crypto-box, ключ data/key.bin) — в блобе {iv,tag,data}, наружу
-// не возвращаются (только флаг hasPassword). Смена пароля — через
-// updateUser({password}).
+// Пароли пользователей — ТОЛЬКО необратимый хэш: scrypt (соль + hash),
+// расшифровка невозможна. (Шифруемые AES-блобом хранятся только креды
+// серверов — server/store.js, им нужно расшифровываться для подключения.)
+// Смена пароля — через updateUser({password}) / updatePassword().
 // Роли: admin (создаёт пользователей, управляет серверами) и user
-// (только просмотр добавленного). Гранулярных ограничений нет;
-// аутентификации в приложении ещё нет — личность выбирается в интерфейсе
-// (заголовок X-Acting-User), при переключении запрашивается пароль.
+// (только просмотр добавленного). Аутентификация — по логину+паролю
+// на /api/login; сессии в server/index.js.
 
 import crypto from 'node:crypto';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getKey, encrypt, decrypt } from './crypto-box.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '..', 'data');
@@ -24,8 +22,11 @@ export const ROLES = {
   user: 'Пользователь',
 };
 
-function encryptPass(pw) {
-  return encrypt({ password: String(pw) });
+// Необратимый хэш пароля: scrypt, случайная соль на пользователя.
+function hashPass(pw) {
+  const salt = crypto.randomBytes(16);
+  const hash = crypto.scryptSync(String(pw), salt, 64);
+  return { algo: 'scrypt', salt: salt.toString('hex'), hash: hash.toString('hex') };
 }
 
 // Постоянное сравнение (без утечки по времени) через дайджесты
@@ -33,6 +34,29 @@ function equalSecret(a, b) {
   const ha = crypto.createHash('sha256').update(String(a), 'utf8').digest();
   const hb = crypto.createHash('sha256').update(String(b), 'utf8').digest();
   return crypto.timingSafeEqual(ha, hb);
+}
+
+function checkPass(stored, plain) {
+  if (!stored || stored.algo !== 'scrypt') return false;
+  const salt = Buffer.from(stored.salt, 'hex');
+  const expect = Buffer.from(stored.hash, 'hex');
+  const calc = crypto.scryptSync(String(plain ?? ''), salt, expect.length);
+  return crypto.timingSafeEqual(calc, expect);
+}
+
+// Миграция старых записей (эксперимент: пароли в AES-блобах) -> scrypt.
+// Расшифровка делается однократно только ради пере-хэширования; в хранилище
+// после миграции остаётся лишь необратимый хэш. При ошибке расшифровки блоб
+// НЕ трогаем (можно повторить позже), иначе пароль будет потерян.
+function migrateLegacyPass(u, decryptLegacy) {
+  const p = u.pass;
+  if (p && typeof p === 'object' && p.iv && p.tag && p.data) {
+    let dec;
+    try { dec = decryptLegacy(p); } catch { return false; }
+    u.pass = dec && dec.password ? hashPass(dec.password) : null;
+    return true;
+  }
+  return false;
 }
 
 function mask(u) {
@@ -48,29 +72,36 @@ async function writeDb(db) {
   await writeFile(USERS_FILE, JSON.stringify(db, null, 2), { mode: 0o600 });
 }
 
-// При первом запуске — два аккаунта: администратор (admin/admin) и
-// пользователь (user/user). Пароли сразу в шифрованном блобе.
+// При первом запуске — два аккаунта: администратор и пользователь
+// (пароли задаёт инсталлер/владелец; здесь сиды для дев-окружения).
 async function ensureDb() {
   let db = await readDb();
   if (db) return db;
-  await getKey();
   const now = new Date().toISOString();
   db = [
-    { id: crypto.randomUUID(), login: 'admin', name: 'Администратор', role: 'admin', enabled: true, pass: encryptPass('admin'), createdAt: now },
-    { id: crypto.randomUUID(), login: 'user', name: 'Пользователь', role: 'user', enabled: true, pass: encryptPass('user'), createdAt: now },
+    { id: crypto.randomUUID(), login: 'admin', name: 'Администратор', role: 'admin', enabled: true, pass: hashPass('admin'), createdAt: now },
+    { id: crypto.randomUUID(), login: 'user', name: 'Пользователь', role: 'user', enabled: true, pass: hashPass('user'), createdAt: now },
   ];
   await writeDb(db);
   return db;
 }
 
+// Разовая миграция старых AES-блобов паролей (если есть) в scrypt-хэши.
+// decryptLegacy передаётся вызывающим (server/index.js) — users-store сам
+// ничего не расшифровывает при обычной работе.
+export async function migrateLegacy(decryptLegacy) {
+  const db = await ensureDb();
+  let changed = false;
+  for (const u of db) if (migrateLegacyPass(u, decryptLegacy)) changed = true;
+  if (changed) await writeDb(db);
+}
+
 export async function listUsers() {
-  await getKey();
   const db = await ensureDb();
   return db.map(mask);
 }
 
 export async function saveUser({ login, name, role, enabled, password }) {
-  await getKey();
   const db = await ensureDb();
   login = String(login || '').trim();
   if (!login) throw new Error('login required');
@@ -82,7 +113,7 @@ export async function saveUser({ login, name, role, enabled, password }) {
     name: String(name || '').trim() || login,
     role: ROLES[role] ? role : 'user',
     enabled: enabled === undefined ? true : !!enabled,
-    pass: password ? encryptPass(password) : null,
+    pass: password ? hashPass(password) : null,
     createdAt: new Date().toISOString(),
   };
   db.push(u);
@@ -91,7 +122,6 @@ export async function saveUser({ login, name, role, enabled, password }) {
 }
 
 export async function updateUser(id, patch) {
-  await getKey();
   const db = await ensureDb();
   const u = db.find((x) => x.id === id);
   if (!u) return null;
@@ -107,13 +137,12 @@ export async function updateUser(id, patch) {
     u.role = patch.role;
   }
   if (patch.enabled !== undefined) u.enabled = !!patch.enabled;
-  if (patch.password) u.pass = encryptPass(patch.password);
+  if (patch.password) u.pass = hashPass(patch.password);
   await writeDb(db);
   return mask(u);
 }
 
 export async function deleteUser(id, actingId) {
-  await getKey();
   const db = await ensureDb();
   const u = db.find((x) => x.id === id);
   if (!u) return { ok: false, error: 'not found' };
@@ -128,39 +157,23 @@ export async function deleteUser(id, actingId) {
   return { ok: true };
 }
 
-// Проверка пароля по id (используется входом). Учётка без пароля не
-// считается защищённой — verify вернёт false только при неверном пароле.
-export async function verifyPassword(userId, plain) {
-  await getKey();
-  const db = await ensureDb();
-  const u = db.find((x) => x.id === userId);
-  if (!u) return false;
-  if (!u.pass) return equalSecret('', plain ?? '');
-  const dec = decrypt(u.pass);
-  return equalSecret(dec.password ?? '', plain ?? '');
-}
-
-// Поиск по логину (для страницы входа) — маска без секретов.
-export async function findByLogin(login) {
-  await getKey();
+// Проверка пароля по логину (страница входа): только сравнение хэшей.
+export async function verifyPasswordByLogin(login, plain) {
   const db = await ensureDb();
   const u = db.find((x) => x.login.toLowerCase() === String(login || '').trim().toLowerCase());
-  return u ? mask(u) : null;
+  if (!u || !u.pass) return null;
+  return checkPass(u.pass, plain) ? u : null;
 }
 
-// Смена пароля самим пользователем: проверяем текущий (если установлен),
-// новый — обязателен и не короче 3 символов.
+// Смена пароля самим пользователем: проверяем текущий, новый — обязателен
+// и не короче 3 символов.
 export async function updatePassword(userId, current, next) {
-  await getKey();
   const db = await ensureDb();
   const u = db.find((x) => x.id === userId);
   if (!u) return { ok: false, error: 'not found' };
-  if (u.pass) {
-    const dec = decrypt(u.pass);
-    if (!equalSecret(dec.password ?? '', current ?? '')) return { ok: false, error: 'Текущий пароль указан неверно' };
-  }
+  if (u.pass && !checkPass(u.pass, current ?? '')) return { ok: false, error: 'Текущий пароль указан неверно' };
   if (!next || String(next).length < 3) return { ok: false, error: 'Пароль слишком короткий (минимум 3 символа)' };
-  u.pass = encryptPass(next);
+  u.pass = hashPass(next);
   await writeDb(db);
   return { ok: true };
 }

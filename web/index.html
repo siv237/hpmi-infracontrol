@@ -189,8 +189,8 @@ table.si td.v{font-weight:500;color:#333c49;white-space:pre-wrap;word-break:brea
 .dotstat.on{color:var(--green)}
 .dotstat.on .d{background:var(--green-dot)}
 .kvm-screen{position:relative;background:#0a0c10;height:360px;display:flex;align-items:center;justify-content:center;overflow:hidden}
-.kvm-screen.connected #noviframe{display:block}
-.kvm-screen #noviframe{width:100%;height:100%;border:0;display:none;position:absolute;inset:0}
+.kvm-screen iframe.novifr{width:100%;height:100%;border:0;display:none;position:absolute;inset:0}
+.kvm-screen.connected iframe.novifr{display:block}
 .kvm-screen #cv{position:absolute;inset:0;width:100%;height:100%;display:none;image-rendering:pixelated}
 .kvm-screen.connected #cv{display:none}
 .kvm-screen .hint{color:#5b6472;font-size:13.5px;text-align:center;padding:0 24px}
@@ -408,9 +408,8 @@ table.si td.v{font-weight:500;color:#333c49;white-space:pre-wrap;word-break:brea
                       <button class="kbtn" id="disconnBtn">Отключиться</button>
                     </div>
                     <div class="kvm-screen" id="cvwrap">
-                      <span class="hint"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 22h8M12 18v4"/></svg>Экран появится после нажатия «Запустить консоль»</span>
+                      <span class="hint"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 22h8M12 18v4"/></svg>Консоль не подключена. Нажмите «Подключиться к консоли»</span>
                       <canvas id="cv" width="2" height="2"></canvas>
-                      <iframe id="noviframe" allow="autoplay; clipboard-write; fullscreen" title="noVNC"></iframe>
                     </div>
                     <div id="msg"></div>
                   </div>
@@ -427,7 +426,7 @@ table.si td.v{font-weight:500;color:#333c49;white-space:pre-wrap;word-break:brea
                 <div class="panel">
                   <div class="ph">Консоль (KVM)</div>
                   <div class="kvm-screen" id="cvwrap2" style="height:calc(100vh - 340px)">
-                    <span class="hint"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 22h8M12 18v4"/></svg>Экран появится после нажатия «Запустить консоль»</span>
+                    <span class="hint"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 22h8M12 18v4"/></svg>Консоль не подключена. Нажмите «Подключиться к консоли»</span>
                   </div>
                 </div>
               </div>
@@ -577,6 +576,11 @@ function snack(t){const s=$('snack');s.textContent=t;s.classList.add('show');cle
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 
 // fetch с сессией; 401 (кроме самой авторизации) — показать страницу входа
+function sessionHeaders(extra){
+  const h=Object.assign({},extra||{});
+  if(authToken)h['Authorization']='Bearer '+authToken;
+  return h;
+}
 async function api(url,opts={}){
   opts.headers=Object.assign({'Content-Type':'application/json'},opts.headers||{});
   if(authToken)opts.headers['Authorization']='Bearer '+authToken;
@@ -608,6 +612,10 @@ function branchKey(host){
   return m?m[1]+'.'+m[2]:'other';
 }
 let expanded={};           // 'root' | 'b:<ключ филиала>' -> открыто?
+let rootName='Все серверы'; // имя корня дерева — из локального data/ui.json (вне git)
+async function loadUiConfig(){
+  try{ const j=await api('/api/ui',{_noKick:true}); if(j&&j.rootName)rootName=j.rootName; }catch{}
+}
 function loadExpanded(){ try{ expanded=JSON.parse(localStorage.getItem('ui.tree.expanded')||'{}')||{}; }catch{ expanded={}; } }
 function saveExpanded(){ try{ localStorage.setItem('ui.tree.expanded',JSON.stringify(expanded)); }catch{} }
 const CHEV='<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>';
@@ -616,7 +624,7 @@ function renderTree(){
   const tree=$('tree');
   if(!servers.length){tree.innerHTML='<div class="tree-empty">Серверы не добавлены.'+(isAdmin()?'<br>Нажмите «Добавить».':'')+'</div>';return;}
   const matched=servers.filter(s=>!q||(s.name||'').toLowerCase().includes(q)||(s.host||'').toLowerCase().includes(q));
-  // корень ДГК -> филиалы по двум октетам IP
+  // корень дерева (имя — локальный конфиг) -> филиалы по двум октетам IP
   const groups=new Map();
   matched.forEach(s=>{const k=branchKey(s.host);if(!groups.has(k))groups.set(k,[]);groups.get(k).push(s);});
   const keys=[...groups.keys()].sort((a,b)=>{
@@ -627,7 +635,7 @@ function renderTree(){
   const searching=!!q;
   let html='';
   const rootOpen=searching||expanded['root']!==false;
-  html+='<div class="tnode folder root'+(rootOpen?' open':'')+'" data-f="root">'+CHEV+'<span class="fld">ДГК</span><span class="cnt">'+matched.length+'</span></div>';
+  html+='<div class="tnode folder root'+(rootOpen?' open':'')+'" data-f="root">'+CHEV+'<span class="fld">'+esc(rootName)+'</span><span class="cnt">'+matched.length+'</span></div>';
   if(rootOpen){
     for(const k of keys){
       const arr=groups.get(k);
@@ -669,6 +677,7 @@ async function delServer(id){
   const j=await api('/api/servers/'+encodeURIComponent(id),{method:'DELETE'});
   if(j.okResp===false)return;
   addEvent('info','Сервер удалён'+(s?(' · '+(s.name||s.host)):''));
+  if(consoles[id])disconnectConsole(id); // закрыть и консоль удалённого
   if(sel===id){sel=null;hideDetail();}
   await load();
 }
@@ -678,6 +687,7 @@ function select(id){
   sel=id; renderTree();
   showDetail();
   loadInv(id);
+  showConsole(); // консоль выбранного сервера или заглушка
 }
 function hideDetail(){$('detBody').style.display='none';$('emptyHint').style.display='flex';}
 function showDetail(){const s=servers.find(x=>x.id===sel);if(!s){hideDetail();return;}$('detBody').style.display='block';$('emptyHint').style.display='none';}
@@ -756,8 +766,8 @@ function renderSI(inv){
 }
 
 async function loadInv(id){
-  const r=await fetch('/api/info',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({serverId:id})});
-  const j=await r.json();
+  const j=await api('/api/info',{method:'POST',body:JSON.stringify({serverId:id})});
+  if(j.status===401)return; // сессия истекла — показывается страница входа
   if(id!==sel)return;
   const s=servers.find(x=>x.id===id);
   const prev=dbgStatus[id];
@@ -797,8 +807,7 @@ function switchTab(name){
   document.querySelectorAll('#tabs .tab').forEach(x=>x.classList.toggle('active',x===t));
   document.querySelectorAll('.tabpane').forEach(x=>x.style.display='none');
   $('pane-'+tab).style.display='block';
-  if(tab==='console') moveConsoleTo('cvwrap2');
-  else moveConsoleTo('cvwrap');
+  showConsole();
   if(tab==='overview'){try{$('cvwrap').parentElement.scrollIntoView({block:'nearest'});}catch{}}
 }
 $('tabs').addEventListener('click',(e)=>{
@@ -959,35 +968,53 @@ function openDlg(s){
 }
 
 // ============================================================
-//  КОНСОЛЬ — noVNC-iframe + snapshot-loop как запасной живой канал.
+//  КОНСОЛИ — по одной на сервер. Подключения живут фоном (по одному
+//  noVNC-iframe на сервер), отключение — только вручную. При выборе
+//  сервера показывается его консоль или заглушка «не подключено».
 // ============================================================
-let rfb=null, _snapTimer=null;
+let _snapTimer=null;
+let consoles={};   // serverId -> { token, iframe, connected }
 
 function showMsg(t,ok){ const m=$('msg'); m.innerHTML='<div class="alert '+(ok?'ok':'err')+'"></div>'; m.firstChild.textContent=t; }
 
-function setConnected(on,label){
-  $('cvwrap').classList.toggle('connected',!!on);
-  $('cvwrap2')&&$('cvwrap2').classList.toggle('connected',!!on);
-  $('kvmStat').classList.toggle('on',!!on);
-  $('kvmStatLabel').textContent=label||(on?'Подключено':'Отключено');
-  $('disconnBtn').textContent=on?'Отключиться':'Подключиться';
-  document.querySelectorAll('.kvm-tool .kbtn[data-k]').forEach(b=>b.disabled=!on);
-  document.querySelectorAll('.kvm-tool .icbtn').forEach(b=>b.disabled=!on);
+function conOf(id){ if(!consoles[id])consoles[id]={token:null,iframe:null,connected:false}; return consoles[id]; }
+function curCon(){ return sel?conOf(sel):null; }
+function curToken(){ const c=curCon(); return (c&&c.connected)?c.token:null; }
+
+// показать консоль выбранного сервера (или заглушку, если не подключена)
+function showConsole(){
+  const dst=(tab==='console')? $('cvwrap2') : $('cvwrap');
+  if(!dst)return;
+  const con=curCon();
+  const active=!!(con&&con.connected&&con.iframe);
+  // спрятать все чужие iframes
+  for(const id in consoles){ const f=consoles[id].iframe; if(f&&f!==con.iframe)f.style.display='none'; }
+  if(active){
+    const f=con.iframe;
+    // перенос в другую площадку перезагружает iframe — noVNC сам переподключится
+    if(f.parentElement!==dst) dst.appendChild(f);
+    if($('cv').parentElement!==dst) dst.appendChild($('cv'));
+    f.style.display='block';
+    dst.classList.add('connected');
+  } else {
+    dst.classList.remove('connected');
+  }
+  $('kvmStat').classList.toggle('on',active);
+  $('kvmStatLabel').textContent=active?'Подключено':'Отключено';
+  $('disconnBtn').textContent=active?'Отключиться':'Подключиться';
+  document.querySelectorAll('.kvm-tool .kbtn[data-k]').forEach(b=>b.disabled=!active);
+  document.querySelectorAll('.kvm-tool .icbtn').forEach(b=>b.disabled=!active);
 }
 
-function openViewer(token,j){
-  window.__token=token;
-  moveConsoleTo(tab==='console'?'cvwrap2':'cvwrap');
-}
-
-// live view: poll серверный декодированный фреймбуфер и рисуем на canvas —
-// надёжно для статичных/чёрных экранов (тот же механизм, что и снапшот).
-function startSnapshotLoop(token){
+// live view: poll серверный декодированный фреймбуфер выбранного сервера
+// и рисуем на canvas — надёжно для статичных/чёрных экранов (запасной канал).
+function startSnapshotLoop(){
   if(_snapTimer) clearInterval(_snapTimer);
   const cv=$('cv');
   const grab=async()=>{
+    const token=curToken(); if(!token)return;
     try{
-      const r=await fetch('/api/snapshot/'+encodeURIComponent(token));
+      const r=await fetch('/api/snapshot/'+encodeURIComponent(token),{headers:sessionHeaders()});
       const j=await r.json();
       if(j.ok && j.png){ const img=new Image(); img.onload=()=>{ if(cv.width!==j.width){cv.width=j.width;cv.height=j.height;} cv.getContext('2d').drawImage(img,0,0); }; img.src=j.png; }
     }catch{}
@@ -996,75 +1023,53 @@ function startSnapshotLoop(token){
   _snapTimer=setInterval(grab,2000);
 }
 
-// переносим один общий noVNC-iframe и canvas между двумя площадками консоли
-let consoleReady=false;
-function moveConsoleTo(id){
-  const dst=(id==='cvwrap2')? $('cvwrap2') : $('cvwrap');
-  if(!dst) return;
-  if($('noviframe').parentElement!==dst) dst.appendChild($('noviframe'));
-  if($('cv').parentElement!==dst) dst.appendChild($('cv'));
-  if(consoleReady) dst.classList.add('connected');
-}
+$('connBtn').onclick=()=>{ connectConsole(sel,0); };
 
-$('connBtn').onclick=()=>{ connectConsole(0); };
-
-function startRfb(token,w,h){
-  if(rfb){ try{rfb.close();}catch{} }
-  const cv=$('cv');
-  rfb=new RfbClient(token,cv,{onStatus:setStatus,onMsg:showMsg,onClosed:()=>{
-    setStatus('Соединение закрыто…');
-    setTimeout(()=>{ if(sel) connectConsole(1); },800);
-  }});
-  rfb.open();
-}
-
-async function connectConsole(attempt){
-  if(!sel) return;
-  // при смене выбранного сервера освобождаем консоль предыдущего
-  if(window.__token&&window.__serverId&&window.__serverId!==sel){
-    try{ await fetch('/api/disconnect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:window.__token})}); }catch{}
-    $('noviframe').src='about:blank';
-    delete window.__token; delete window.__serverId;
-    consoleReady=false;
-    setConnected(false);
-  }
+async function connectConsole(id,attempt){
+  if(!id) return;
+  const con=conOf(id);
+  if(con.connected){ showConsole(); return; } // уже подключён — просто показать
   snack(attempt?('Переподключение '+attempt+'/3…'):'Подключение к AVR…');
-  const r=await fetch('/api/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({serverId:sel})});
+  const r=await fetch('/api/connect',{method:'POST',headers:sessionHeaders({'Content-Type':'application/json'}),body:JSON.stringify({serverId:id})});
   const j=await r.json();
-  if(!j.ok){ if(attempt<3){ snack('Ошибка: '+((j.error||'').slice(0,70))+' — повтор…'); setTimeout(()=>connectConsole(attempt+1),1500); } else { snack('Не удалось подключиться: '+(j.error||'')); showMsg(j.error||'Ошибка подключения',false); addEvent('err','Не удалось открыть консоль — '+((j.error||'').slice(0,80))); } return; }
-  snack('Экран '+j.width+'×'+j.height);
-  window.__token=j.token;
-  window.__serverId=sel;
-  consoleReady=true;
-  setConnected(true);
-  // noVNC-iframe: resize=scale помещает весь экран сервера в контейнер;
-  // у нашего RFB-моста нет ExtendedDesktopSize, поэтому resize=remote не может
-  // реально изменить размер хоста.
+  if(j.status===401)return; // сессия истекла — показана страница входа
+  if(!j.ok){ if(attempt<3){ snack('Ошибка: '+((j.error||'').slice(0,70))+' — повтор…'); setTimeout(()=>connectConsole(id,attempt+1),1500); } else { snack('Не удалось подключиться: '+(j.error||'')); showMsg(j.error||'Ошибка подключения',false); addEvent('err','Не удалось открыть консоль — '+((j.error||'').slice(0,80))); } return; }
+  snack(j.width?('Экран '+j.width+'×'+j.height):'Сессия восстанавливается…');
+  con.token=j.token;
+  con.connected=true;
+  // свой noVNC-iframe на каждый сервер: resize=scale помещает весь экран
+  // в контейнер; reconnect=1 возвращает канал после переносов между площадками.
+  const s=servers.find(x=>x.id===id);
   const u = '/novnc/vnc.html?host=' + encodeURIComponent(location.hostname||location.host) +
             '&port=' + encodeURIComponent(location.port) +
             '&path=' + encodeURIComponent('vnc?token=' + j.token) +
             '&autoconnect=1&resize=scale&reconnect=1&show_dot=1';
-  $('noviframe').src = u;
-  openViewer(j.token, j);
-  startSnapshotLoop(j.token);
-  const s=servers.find(x=>x.id===sel);
-  addEvent('ok','Консоль открыта'+(s?(' · '+(s.name||s.host)):'')+' · экран '+j.width+'×'+j.height);
+  const f=document.createElement('iframe');
+  f.className='novifr';
+  f.allow='autoplay; clipboard-write; fullscreen';
+  f.title='noVNC · '+(s?(s.name||s.host):id);
+  f.style.display='none';
+  const dst=(tab==='console')? $('cvwrap2') : $('cvwrap');
+  dst.appendChild(f);
+  f.src=u;
+  con.iframe=f;
+  showConsole();
+  addEvent('ok','Консоль открыта'+(s?(' · '+(s.name||s.host)):'')+(j.width?(' · экран '+j.width+'×'+j.height):''));
   snack('Консоль открыта в noVNC');
 }
 
-// закрытие консоли: разрывает сессию на сервере (iRMC освобождается, 0xd8)
-async function disconnectConsole(){
-  if(window.__token){
-    try{ await fetch('/api/disconnect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:window.__token})}); }catch{}
+// закрытие консоли сервера: только вручную; разрывает сессию (iRMC, 0xd8)
+async function disconnectConsole(id){
+  const con=conOf(id); if(!con)return;
+  if(con.token){
+    try{ await fetch('/api/disconnect',{method:'POST',headers:sessionHeaders({'Content-Type':'application/json'}),body:JSON.stringify({token:con.token})}); }catch{}
   }
-  if(rfb){ rfb.close(); rfb=null; }
-  if(_snapTimer){ clearInterval(_snapTimer); _snapTimer=null; }
-  $('noviframe').src='about:blank';
-  consoleReady=false;
-  setConnected(false);
-  delete window.__token; delete window.__serverId;
-  addEvent('info','Консоль закрыта');
+  if(con.iframe){ try{ con.iframe.remove(); }catch{} }
+  con.iframe=null; con.token=null; con.connected=false;
+  const s=servers.find(x=>x.id===id);
+  addEvent('info','Консоль закрыта'+(s?(' · '+(s.name||s.host)):''));
   snack('Консоль закрыта');
+  if(id===sel)showConsole();
 }
 
 // ---- кнопки KVM-тулбара --------------------------------------------------
@@ -1073,7 +1078,7 @@ async function disconnectConsole(){
 // живую сессию iRMC (HID-коды, как в RFB-мосте).
 const HID={ctrl:224,alt:226,del:76,esc:41};
 function sendKeys(steps){
-  return fetch('/api/keys',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:window.__token,steps})});
+  return fetch('/api/keys',{method:'POST',headers:sessionHeaders({'Content-Type':'application/json'}),body:JSON.stringify({token:curToken(),steps})});
 }
 async function tapKey(code){
   const stuck=[...document.querySelectorAll('.kvm-tool .kbtn.toggled')].map(b=>HID[b.getAttribute('data-k')]);
@@ -1086,23 +1091,24 @@ async function tapKey(code){
 }
 document.querySelectorAll('.kvm-tool .kbtn[data-k]').forEach(b=>{
   b.onclick=async()=>{
-    if(!window.__token){ snack('Консоль не подключена'); return; }
+    if(!curToken()){ snack('Консоль не подключена'); return; }
     const k=b.getAttribute('data-k');
     if(k==='ctrl'||k==='alt'){ b.classList.toggle('toggled'); return; }
     await tapKey(HID[k]);
   };
 });
-$('disconnBtn').onclick=()=>{ if(consoleReady) disconnectConsole(); else if(sel) connectConsole(0); };
+$('disconnBtn').onclick=()=>{ const c=curCon(); if(c&&c.connected) disconnectConsole(sel); else if(sel) connectConsole(sel,0); };
 $('fsBtn').onclick=()=>{
   const el=(tab==='console')?$('cvwrap2'):$('cvwrap');
   try{ if(document.fullscreenElement)document.exitFullscreen(); else el.requestFullscreen(); }
   catch{ snack('Полный экран недоступен'); }
 };
 $('shotBtn').onclick=async()=>{
-  if(!window.__token){ snack('Нет активной сессии'); return; }
+  const token=curToken();
+  if(!token){ snack('Нет активной сессии'); return; }
   snack('Снимок…');
   try{
-    const r=await fetch('/api/snapshot/'+encodeURIComponent(window.__token));
+    const r=await fetch('/api/snapshot/'+encodeURIComponent(token),{headers:sessionHeaders()});
     const j=await r.json();
     if(j.ok && j.png){
       const img=new Image(); img.onload=()=>{ const c=$('cv'); if(c.width!==j.width){c.width=j.width;c.height=j.height;} c.getContext('2d').drawImage(img,0,0); };
@@ -1142,111 +1148,13 @@ document.querySelectorAll('.nav-item').forEach(n=>{
 });
 $('globalSearch').oninput=(e)=>{$('treeSearch').value=e.target.value;renderTree();};
 $('treeSearch').oninput=()=>renderTree();
-setConnected(false);
+showConsole();
+startSnapshotLoop();
 renderEvents();
 
 // ============================================================
 //  минимальный RFB 3.8 клиент (как в рабочей версии)
 // ============================================================
-class RfbClient{
-  constructor(token,cv,ev){this.token=token;this.cv=cv;this.cvctx=cv.getContext('2d');this.ev=ev;this.stage='vers';this.buf=new Uint8Array(0);this.w=0;this.h=0;this.img=null;
-    window.__rfb={rx:0,draws:0,rects:0,stage:this.stage};}
-  open(){
-    const url=(location.protocol==='https:'?'wss://':'ws://')+location.host+'/vnc?token='+encodeURIComponent(this.token);
-    const ws=this.ws=new WebSocket(url);
-    ws.binaryType='arraybuffer';
-    ws.onopen=()=>this.ev.onStatus?.('Соединение…');
-    ws.onmessage=(ev)=>{const d=new Uint8Array(ev.data); this.buf=concat(this.buf,d); window.__rfb.rx+=d.length; try{this.drain();}catch(e){ console.log('DRAIN-ERR', String(e).slice(0,120)); }};
-    ws.onclose=()=>{ this.ev.onStatus?.('Соединение закрыто'); this.ev.onClosed&&this.ev.onClosed(); };
-    ws.onerror=()=>{this.ev.onStatus?.('Ошибка WebSocket');};
-  }
-  close(){try{this.ws&&this.ws.close();}catch{}}
-  send(b){ if(this.ws&&this.ws.readyState===1) this.ws.send(b.buffer.slice(b.byteOffset,b.byteOffset+b.byteLength)); }
-  be16(o){return (this.buf[o]<<8)|this.buf[o+1];}
-  be32(o){return ((this.buf[o]<<24)|(this.buf[o+1]<<16)|(this.buf[o+2]<<8)|this.buf[o+3])>>>0;}
-  drain(){
-    while(true){
-      const b=this.buf;
-      if(this.stage==='vers'){
-        if(b.length<12)break;
-        this.send(str('RFB 003.008\n'));
-        b.copyWithin(0,12); this.buf=this.buf.slice(12); this.stage='sec';
-      } else if(this.stage==='sec'){
-        if(b.length<1)break; const cnt=b[0];
-        if(b.length<1+cnt)break;
-        this.buf=b.slice(1+cnt); this.send(new Uint8Array([1])); this.stage='secres';
-      } else if(this.stage==='secres'){
-        if(b.length<4)break;
-        const ok=b[0]===0&&b[1]===0&&b[2]===0&&b[3]===0;
-        this.buf=b.slice(4);
-        if(!ok){this.ev.onStatus?.('Отказ авторизации');this.close();return;}
-        this.send(new Uint8Array([0])); // shared=0
-        this.stage='init';
-      } else if(this.stage==='init'){
-        if(b.length<4+16+4)break;
-        this.w=this.be16(0); this.h=this.be16(2);
-        const nameLen=this.be32(20);
-        if(b.length<4+16+4+nameLen)break;
-        this.buf=b.slice(4+16+4+nameLen);
-        this.setupCanvas();
-        this.sendSetEncodings();
-        this.requestUpdate(false);
-        this.stage='ready';
-        window.__rfb.stage='ready';
-        this.attachInput();
-        this.ev.onStatus?.(`Экран ${this.w}×${this.h}`);
-      } else if(this.stage==='ready'){
-        if(b.length<1)break;
-        const t=b[0];
-        if(t===0){
-          if(b.length<4)break;
-          const nr=this.be16(2); let off=4; let consumed=true;
-          for(let i=0;i<nr;i++){
-            if(b.length<off+12){consumed=false;break;}
-            const rx=this.be16(off),ry=this.be16(off+2),rw=this.be16(off+4),rh=this.be16(off+6),enc=this.be32(off+8); off+=12;
-            if(enc===0){ const n=rw*rh*4; if(b.length<off+n){consumed=false;break;} this.drawRect(rx,ry,rw,rh,b.subarray(off,off+n)); off+=n; }
-            else { consumed=false; this.ev.onStatus?.('неизвестное кодирование '+enc); break; }
-          }
-          if(!consumed)break;
-          this.buf=b.slice(off); this.requestUpdate(true);
-        } else { this.ev.onStatus?.('msg '+t); break; }
-      } else break;
-    }
-  }
-  setupCanvas(){
-    const cv=this.cv; cv.width=this.w; cv.height=this.h;
-    this.img=this.cvctx.createImageData(this.w,this.h);
-    cv.style.aspectRatio=this.w+' / '+this.h;
-  }
-  drawRect(x,y,w,h,bytes){
-    window.__rfb.draws++; window.__rfb.rects+=w*h;
-    const img=this.img,d=img.data,W=this.w;
-    for(let j=0;j<h;j++){ const base=((y+j)*W+x)*4; for(let i=0;i<w;i++){ const o=base+i*4,so=i*4; d[o]=bytes[so+2]; d[o+1]=bytes[so+1]; d[o+2]=bytes[so]; d[o+3]=255; } }
-    this.cvctx.putImageData(img,0,0);
-  }
-  sendSetEncodings(){ const p=new Uint8Array(8); p[0]=2; p[3]=1; for(let i=0;i<4;i++) p[4+i]=(i<4?0:0); /* enc 0 raw */ this.send(p); }
-  requestUpdate(inc){ const p=new Uint8Array(10); p[0]=3; p[1]=inc?1:0; p[2]=0;p[3]=0;p[4]=0;p[5]=0; p[6]=this.w>>8;p[7]=this.w&255; p[8]=this.h>>8;p[9]=this.h&255; this.send(p); }
-  attachInput(){
-    const cv=this.cv,self=this;
-    const pos=(e)=>{const r=cv.getBoundingClientRect(); return [Math.round((e.clientX-r.left)*(self.w/r.width)), Math.round((e.clientY-r.top)*(self.h/r.height))];};
-    cv.onmousemove=(e)=>{const[x,y]=pos(e); self.pointer(e.buttons,x,y);};
-    cv.onmousedown=(e)=>{const[x,y]=pos(e); self.pointer(e.buttons,x,y);};
-    cv.onmouseup=(e)=>{const[x,y]=pos(e); self.pointer(e.buttons,x,y);};
-    cv.oncontextmenu=(e)=>e.preventDefault();
-    cv.onwheel=(e)=>{e.preventDefault(); const[x,y]=pos(e); self.pointer(e.buttons | ((e.deltaY<0)?8:16), x, y);};
-    cv.tabIndex=0;
-    cv.onkeydown=(e)=>{ if(!e.repeat) self.key(e.keyCode,true); if([32,37,38,39,40].includes(e.keyCode))e.preventDefault(); };
-    cv.onkeyup=(e)=>{ self.key(e.keyCode,false); };
-  }
-  pointer(buttons,x,y){
-    let mask=0; if(buttons&1)mask|=1; if(buttons&4)mask|=2; if(buttons&2)mask|=4; // left,right,middle
-    if(buttons&8)mask|=8; if(buttons&16)mask|=16;
-    const p=new Uint8Array(6); p[0]=mask; p[1]=0; p[2]=x>>8;p[3]=x&255;p[4]=y>>8;p[5]=y&255; this.send(p);
-  }
-  key(kc,down){ const p=new Uint8Array(8); p[0]=down?1:0; p[1]=0;p[2]=0;p[3]=0; const v=kc>>>0; p[4]=(v>>>24)&255;p[5]=(v>>>16)&255;p[6]=(v>>>8)&255;p[7]=v&255; this.send(p); }
-}
-function concat(a,b){ const r=new Uint8Array(a.length+b.length); r.set(a); r.set(b,a.length); return r; }
-function str(s){ const e=new TextEncoder(); return e.encode(s); }
 
 // ---- авторизация: страница входа -----------------------------------------
 function showLogin(msg){
@@ -1259,6 +1167,7 @@ function showLogin(msg){
 function hideLogin(){ $('loginView').classList.remove('show'); }
 async function enterApp(user){
   me=user; hideLogin();
+  await loadUiConfig();
   renderUserBox(); applyPerms();
   showPage('servers');
   load(); loadUsers();
@@ -1278,6 +1187,7 @@ $('l_login').onkeydown=(e)=>{ if(e.key==='Enter')$('l_password').focus(); };
 // ---- запуск ---------------------------------------------------------------
 loadExpanded();
 (async function boot(){
+  await loadUiConfig();
   if(authToken){
     const m=await api('/api/me',{_noKick:true});
     if(m.ok&&m.user){ enterApp(m.user); return; }

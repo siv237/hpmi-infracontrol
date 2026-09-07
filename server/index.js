@@ -12,7 +12,8 @@ import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { IrmcClient, testIrmc } from './irmc.js';
 import { listServers, saveServer, deleteServer, getServer, updateServer } from './store.js';
-import { listUsers, saveUser, updateUser, deleteUser, findByLogin, verifyPassword, updatePassword } from './users-store.js';
+import { listUsers, saveUser, updateUser, deleteUser, verifyPasswordByLogin, updatePassword, migrateLegacy } from './users-store.js';
+import { decrypt as decryptLegacyBox, getKey } from './crypto-box.js';
 import { discover, getSession, inventory, parseInventory } from './discover.js';
 import { probe } from './probe.js';
 import { attachVnc } from './vnc.js';
@@ -29,6 +30,11 @@ const sessionsByHost = new Map(); // host -> token (one active console per host)
 // Сессии входа: токен -> userId (см. /api/login, authUser)
 const authSessions = new Map();
 
+// Разовая миграция старых блобов паролей пользователей в scrypt-хэши
+// (необратимое хранение; расшифровываемые AES-блобы — только креды серверов).
+// Ключ должен быть загружен ДО расшифровки — иначе блоб был бы потерян.
+migrateLegacy(async (b) => { await getKey(); return decryptLegacyBox(b); }).catch(() => {});
+
 function createSession(name, host) {
   const token = randomUUID();
   const sess = {
@@ -38,6 +44,10 @@ function createSession(name, host) {
     cli: null, state: 'starting', width: 0, height: 0, status: [], error: null, startedAt: Date.now(),
     clients: new Set(),
     lastFrameAt: Date.now(),
+    manualClose: false,        // true — только после ручного «Отключиться»
+    creds: null,               // последние использованные креды (в памяти, не персистится)
+    reconnectTimer: null,
+    _retryN: 0,
     fb(rects) { const c = sess.cli; return c ? { width: c.fb.width, height: c.fb.height, pix: rects ? c.fb.getRGBFor(rects) : c.fb.getRGB() } : { width: 0, height: 0, pix: new Uint32Array(0) }; },
     fbSize() { const c = sess.cli; return c ? { width: c.fb.width, height: c.fb.height } : { width: 0, height: 0 }; },
     key: (k, d) => sess.cli && sess.cli.key(k, d),
@@ -78,18 +88,21 @@ async function cachedSession(cfg) {
 }
 
 async function startSession(sess, host, user, pass, port, secure) {
+  // креды держим в памяти сессии — авто-реконнект поднимает то же подключение
+  sess.creds = { host, user, pass, port, secure };
   const cfg = await cachedSession({ host, username: user, password: pass, port, secure });
   const cli = new IrmcClient(cfg, {
     onStatus: (s) => {
       sess.status.push(s);
       if (s.startsWith('vesa:')) {
         sess.state = 'live';
+        sess._retryN = 0; // связь поднята — сбрасываем счётчик реконнектов
         const m = /^vesa:(\d+)x(\d+)@(\d+)/.exec(s);
         if (m) { sess.width = +m[1]; sess.height = +m[2]; }
       }
     },
-    onError: (e) => { sess.error = e; sess.state = 'error'; sess.notifyFrame && null; },
-    onExit: () => { sess.state = 'closed'; },
+    onError: (e) => { sess.error = e; sess.state = 'error'; scheduleReconnect(sess); },
+    onExit: () => { sess.state = 'closed'; scheduleReconnect(sess); },
     onFrame: (fb, rects) => {
       if (process.env.IRMC_DEBUG === '1' && (fb.width !== sess.width || fb.height !== sess.height)) {
         console.log(`[dbg] framebuffer size ${sess.width}x${sess.height} -> ${fb.width}x${fb.height} (rects=${rects ? rects.length : 0})`);
@@ -118,6 +131,34 @@ async function startSession(sess, host, user, pass, port, secure) {
   return sess;
 }
 
+// Перезапуск сессии НА МЕСТЕ: тот же токен и объект сессии, новый клиент iRMC.
+async function restartSession(sess) {
+  if (sess._keyframe) { clearInterval(sess._keyframe); sess._keyframe = null; }
+  if (sess.cli) { try { sess.cli.close(); } catch {} sess.cli = null; }
+  sess.state = 'starting'; sess.error = null; sess.startedAt = Date.now();
+  const c = sess.creds;
+  await startSession(sess, c.host, c.user, c.pass, c.port, c.secure);
+}
+
+// Авто-восстановление сессии iRMC в ТОМ ЖЕ токене: браузерные клиенты
+// (уже сидящие на /vnc?token=...) продолжают получать кадры после
+// восстановления, переподключаться им не нужно. Ручное «Отключиться»
+// (manualClose) авто-реконнект отменяет.
+function scheduleReconnect(sess) {
+  if (!sess || sess.manualClose || sess.reconnectTimer || !sess.creds) return;
+  sess._retryN += 1;
+  const delay = Math.min(30000, 2000 * Math.pow(2, sess._retryN - 1));
+  sess.reconnectTimer = setTimeout(async () => {
+    sess.reconnectTimer = null;
+    if (sess.manualClose || sess.cli) return;
+    try {
+      await restartSession(sess);
+      await waitLive(sess, 10000);
+      if (sess.state !== 'live') scheduleReconnect(sess);
+    } catch { scheduleReconnect(sess); }
+  }, delay);
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
 
@@ -130,6 +171,16 @@ const server = http.createServer(async (req, res) => {
     const au = await authUser(req);
     if (!au) return json(res, 401, { ok: false, error: 'требуется вход' });
     req.user = au;
+  }
+
+  // Локальные настройки отображения (data/ui.json, вне git): например,
+  // rootName — имя корня дерева серверов. Фактические названия инфраструктуры
+  // в git не попадают.
+  if (url.pathname === '/api/ui' && req.method === 'GET') {
+    try {
+      const cfg = JSON.parse(await readFile(path.join(ROOT, 'data', 'ui.json'), 'utf8'));
+      return json(res, 200, { ok: true, rootName: String(cfg.rootName || '').trim() || 'Все серверы' });
+    } catch { return json(res, 200, { ok: true, rootName: 'Все серверы' }); }
   }
 
   if (url.pathname === '/api/test' && req.method === 'POST') {
@@ -165,9 +216,10 @@ const server = http.createServer(async (req, res) => {
     if (!stored) return json(res, 404, { ok: false, error: 'server not found' });
     // The iRMC console is single-session and fragile: REUSE the existing live
     // session (do NOT open a second console, which is what knocks the device
-    // into 503). Only start a fresh one when nothing is active. A 'starting'
-    // session that has been stuck (no video mode) for a while is stale — the
-    // iRMC still holds the console, so release it (sends 0xd8) and re-open.
+    // into 503). Any number of browser clients attach to that one session and
+    // can watch/control simultaneously. A 'starting' session that has been
+    // stuck (no video mode) for a while is stale — the iRMC still holds the
+    // console, so release it (sends 0xd8) and re-open.
     const existing = sessionsByHost.get(stored.host);
     if (existing && sessions.get(existing)) {
       const es = sessions.get(existing);
@@ -179,9 +231,18 @@ const server = http.createServer(async (req, res) => {
           if (es.state === 'live') return json(res, 200, { ok: true, token: es.token, name: es.name, host: es.host, width: es.width, height: es.height, state: es.state });
         }
         // fall through: release the stale session and open a fresh console
+        es.manualClose = true; // осознанный релиз зависшей — без авто-реконнекта
         closeSession(existing);
+      } else if (!es.manualClose && es.creds) {
+        // сессия оборвалась (iRMC/сеть) и не была закрыта вручную —
+        // восстанавливаем ТОТ ЖЕ токен на месте; клиенты просто продолжат
+        if (es.reconnectTimer) { clearTimeout(es.reconnectTimer); es.reconnectTimer = null; }
+        restartSession(es).catch(() => scheduleReconnect(es));
+        await waitLive(es, 8000);
+        return json(res, 200, { ok: true, token: es.token, name: es.name, host: es.host, width: es.width, height: es.height, state: es.state });
       } else {
-        closeSession(existing); // closed/error -> release
+        es.manualClose = true;
+        closeSession(existing); // closed/error после ручного отключения -> свежая
       }
     }
     const sess = createSession(stored.name || stored.host, stored.host);
@@ -190,6 +251,7 @@ const server = http.createServer(async (req, res) => {
       await waitLive(sess, 10000);
       return json(res, 200, { ok: true, token: sess.token, name: sess.name, host: sess.host, width: sess.width, height: sess.height, state: sess.state });
     } catch (e) {
+      sess.manualClose = true; // первичный коннект не удался — не крутим реконнекты
       closeSession(sess);
       return json(res, 200, { ok: false, error: String(e.message || e), state: sess.state, status: sess.status });
     }
@@ -253,6 +315,7 @@ const server = http.createServer(async (req, res) => {
     if (!body) return;
     const s = sessions.get(body.token);
     if (!s) return json(res, 200, { ok: true, gone: true });
+    s.manualClose = true; // ручное отключение — авто-реконнект не нужен
     closeSession(s);
     return json(res, 200, { ok: true });
   }
@@ -306,9 +369,8 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/login' && req.method === 'POST') {
     const body = await readJson(req, res);
     if (!body) return;
-    const u = await findByLogin(body.login);
-    const okP = !!(u && u.enabled && (await verifyPassword(u.id, body.password || '')));
-    if (!okP) return json(res, 200, { ok: false, error: 'Неверный логин или пароль' });
+    const u = await verifyPasswordByLogin(body.login, body.password || '');
+    if (!u || !u.enabled) return json(res, 200, { ok: false, error: 'Неверный логин или пароль' });
     const token = randomUUID();
     authSessions.set(token, u.id);
     return json(res, 200, { ok: true, token, user: u });
@@ -413,9 +475,11 @@ const server = http.createServer(async (req, res) => {
     const rel = url.pathname.slice('/novnc/'.length) || 'vnc.html';
     const fpath = path.normalize(path.join(ROOT, 'web', 'novnc', rel));
     if (!fpath.startsWith(path.join(ROOT, 'web', 'novnc'))) return plain(res, 'bad path', 403);
+    // shell приложения не кэшируем — обновления должны применять сразу
+    const noStore = rel === 'vnc.html' || !/\.[a-z0-9]+$/i.test(rel);
     try {
       const data = await readFile(fpath);
-      res.writeHead(200, { 'content-type': mimeFor(fpath) });
+      res.writeHead(200, { 'content-type': mimeFor(fpath), ...(noStore ? { 'cache-control': 'no-store' } : {}) });
       return res.end(data);
     } catch {
       // Directory/extension-less routes -> vnc.html; otherwise 404 (never return
@@ -434,7 +498,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/' || url.pathname === '/index.html') {
     try {
       const html = await readFile(path.join(ROOT, 'web', 'index.html'));
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
       return res.end(html);
     } catch {
       return plain(res, 'no web/index.html');
@@ -455,7 +519,7 @@ function readJson(req, res) {
   });
 }
 function json(res, code, obj) {
-  res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' });
+  res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
   res.end(JSON.stringify(obj));
 }
 function plain(res, text, code = 200) {
@@ -519,14 +583,9 @@ server.on('upgrade', (req, socket, head) => {
     wss.handleUpgrade(req, socket, head, (ws) => {
       if (ws.protocol) { /* keep negotiated subprotocol */ }
       sess.clients.add(ws);
-      ws.on('close', () => {
-        sess.clients.delete(ws);
-        if (sess.clients.size === 0) {
-          // No one is watching -> release the console (single-session device).
-          clearTimeout(sess._ttl);
-          sess._ttl = setTimeout(() => closeSession(sess), 30000);
-        } else clearTimeout(sess._ttl);
-      });
+      // Клиенты могут приходить и уходить в любом количестве — сессия iRMC
+      // живёт независимо от браузерных подключений (рвётся только вручную).
+      ws.on('close', () => { sess.clients.delete(ws); });
       attachVnc(ws, sess);
     });
   } else {
