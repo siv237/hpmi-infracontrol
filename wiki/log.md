@@ -520,3 +520,32 @@ AES-блобы допустимы только для кредов СЕРВЕР�
 же токен; 40с без клиентов — state=live (рипер удалён); /api/disconnect
 освобождает. Феатчинг фронта: connectConsole понимает state=starting.
 Дашборд «Обзор» (reference_design/ChatGPT Image 7 сент.) — отложен.
+
+## [2026-09-07] project+ingest | ISO-монтирование (п.10): менеджер образов + состояние + протокол
+
+- Реализован менеджер загрузки/хранения ISO (п.10.2): server/iso.js,
+  data/iso/ (вне git), стрим-загрузка, список/переименование/удаление,
+  read-only раздача байт; вкладка «ISO» с видимым прогрессом (XHR).
+- Протокол (10.1, из декомпиляции avr_irmc_s2.jar):
+  - StorageClientConnect id=153: ip[16] shareIndex0/1(byte) port(le16)
+    len0/len1(byte) shareType0/1(byte) ipType(byte) uid seq reserved[5]
+    sharePath0/1 (Unicode, pad 512). Клиент поднимает TCP-сервер 5901,
+    iRMC сам тянет образ (read-only RAW).
+  - StorageClientDisconnect id=154: payload byte[0].
+  - StorageStatus id=137 (статус шары). Привилегия 's' (storage),
+    config-биты 8/16 = storage0/storage1.
+  - Типы: DT_CD_ISO_IMAGE=11, DT_DVD_ISO_IMAGE=12 (+ read-only).
+  - Открыт вопрос: протокол отдачи образа на 5901 в декомпиляции не
+    виден (нативный) — отрабатывается тестом на живом iRMC.
+- Этап A: состояние «примонтированный ISO» на сервере (storage.mounts:
+  serverId → iso), API /api/mounts (GET/PUT/DELETE), кнопка ISO в
+  карточке сервера. Стабильно, переживает F5.
+- Этап B (в работе): команды 153/154 в irmc.js + приёмный сервер 5901
+  (отдача ISO), отправка по активной KVM-сессии сервера.
+- Тест-план владельца: смонтировать ISO к 10.67.17.101, проверить диск
+  на root@10.67.19.5 (Альт).
+- Этап B (код готов, ждёт проверки): команды 153/154 в irmc.js
+  (storageClientConnect/Disconnect, полные payload по декомпиляции),
+  приёмный сервер 5901 (отдаёт ISO по самому свежему active-маунту),
+  auto-досылка 153 при открытии сессии с монтированным ISO.
+  Реальный проброс выполняется только при активной KVM-сессии сервера.

@@ -17,12 +17,12 @@ const CHANGES_LIMIT = 1000;
 const EVENTS_LIMIT = 500;
 const VERSIONS_LIMIT = 200;
 
-let db = { lastKnown: {}, changes: [], events: [], versions: {} };
+let db = { lastKnown: {}, changes: [], events: [], versions: {}, mounts: {} };
 let loaded = false;
 
 async function load() {
   if (loaded) return db;
-  try { db = { lastKnown: {}, changes: [], events: [], versions: {}, ...JSON.parse(await readFile(FILE, 'utf8')) }; } catch {}
+  try { db = { lastKnown: {}, changes: [], events: [], versions: {}, mounts: {}, ...JSON.parse(await readFile(FILE, 'utf8')) }; } catch {}
   if (!Object.keys(db.lastKnown).length) {
     try {
       const old = JSON.parse(await readFile(LEGACY_LASTKNOWN, 'utf8'));
@@ -105,4 +105,28 @@ export async function getVersions(serverId, limit = 50) {
   const d = await load();
   const list = d.versions[serverId] || [];
   return list.slice(-limit).reverse();
+}
+
+// === Монтирование ISO (п.10.4/10.5): состояние «примонтированный образ» ===
+// Стабильное: хранится на сервере, переживает F5. Поле mounts: serverId -> {isoId, isoName, ts, by}
+export async function getMounts() {
+  const d = await load();
+  return d.mounts;
+}
+export async function getMount(serverId) {
+  const d = await load();
+  return d.mounts[serverId] || null;
+}
+export async function setMount(serverId, iso, by = null) {
+  const d = await load();
+  d.mounts[serverId] = { isoId: iso.id, isoName: iso.name, ts: new Date().toISOString(), by: by || null };
+  await persist();
+  return d.mounts[serverId];
+}
+export async function clearMount(serverId) {
+  const d = await load();
+  if (!d.mounts[serverId]) return false;
+  delete d.mounts[serverId];
+  await persist();
+  return true;
 }

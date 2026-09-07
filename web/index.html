@@ -362,6 +362,7 @@ table.si td.v{font-weight:500;color:#333c49;white-space:pre-wrap;word-break:brea
             <div class="det-head">
               <div class="ttl"><span id="detTitle">—</span><span class="pill off" id="detPill">Нет данных</span></div>
               <div class="det-actions">
+                <button class="tool-btn" id="mountBtn" title="Примонтировать ISO" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px"><circle cx="12" cy="12" r="9"/><path d="M12 3a4.5 4.5 0 0 0-1.2 8.9L9 18l3-2 3 2-1.8-6.1A4.5 4.5 0 0 0 12 3z"/></svg><span id="mountBtnLabel">Примонтировать ISO</span></button>
                 <button class="tool-btn primary" id="connBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>Подключиться к консоли</button>
                 <div class="menu-wrap">
                   <button class="tool-btn" id="actionsBtn">Действия <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><path d="M6 9l6 6 6-6"/></svg></button>
@@ -724,7 +725,7 @@ function select(id){
   showConsole(); // консоль выбранного сервера или заглушка
 }
 function hideDetail(){$('detBody').style.display='none';$('emptyHint').style.display='flex';}
-function showDetail(){const s=servers.find(x=>x.id===sel);if(!s){hideDetail();return;}$('detBody').style.display='block';$('emptyHint').style.display='none';}
+function showDetail(){const s=servers.find(x=>x.id===sel);if(!s){hideDetail();return;}$('detBody').style.display='block';$('emptyHint').style.display='none';renderMount(sel);}
 
 function renderDetail(){
   const s=servers.find(x=>x.id===sel); if(!s){hideDetail();return;}
@@ -950,6 +951,43 @@ function fmtMB(n){ return (n/1048576).toFixed(1)+' МБ'; }
 $('isoFile').onchange=(e)=>{ const f=e.target.files&&e.target.files[0]; if(f)isoUpload(f); e.target.value=''; };
 $('isoUploadBtn').onclick=()=>{ if(!isAdmin()){snack('Только администратор');return;} $('isoFile').click(); };
 $('isoRefreshBtn').onclick=()=>loadIso();
+
+// === Монтирование ISO в карточке сервера (п.10/10.5) ===
+let mountMap={};
+async function loadMounts(){
+  const j=await api('/api/mounts');
+  mountMap={};
+  if(j.ok){(j.mounts||[]).forEach(m=>mountMap[m.serverId]=m);}
+  if(sel)renderMount(sel);
+}
+async function renderMount(id){
+  const m=mountMap[id];
+  if(!m){ $('mountBtn').style.display='none'; return; }
+  $('mountBtn').style.display='';
+  $('mountBtnLabel').textContent='ISO: '+m.isoName;
+}
+$('mountBtn').onclick=()=>{
+  const m=mountMap[sel];
+  if(m){ if(confirm('Отмонтировать ISO «'+m.isoName+'»?')) unmountISO(sel); }
+  else openMountPicker(sel);
+};
+async function unmountISO(id){
+  const j=await api('/api/mounts/'+encodeURIComponent(id),{method:'DELETE'});
+  if(j.okResp===false)return;
+  snack('Отмонтировано'); await loadMounts();
+}
+async function openMountPicker(id){
+  if(!isAdmin()){snack('Только администратор');return;}
+  const iso=await api('/api/iso');
+  if(!iso.ok||!(iso.images||[]).length){ snack('Нет ISO-образов — загрузите во вкладке ISO'); return; }
+  const name=prompt('Выберите ISO (имя одного из образов):\n\n'+iso.images.map(x=>' • '+x.name).join('\n'));
+  if(!name)return;
+  const found=iso.images.find(x=>x.name===name);
+  if(!found){ snack('Образ не найден'); return; }
+  const j=await api('/api/mounts',{method:'PUT',body:JSON.stringify({serverId:id,isoId:found.id})});
+  if(j.okResp===false)return;
+  snack('Примонтирован: '+found.name); addEvent('ok','Примонтирован ISO · '+found.name); await loadMounts();
+}
 
 async function loadUsers(){
   const j=await api('/api/users');

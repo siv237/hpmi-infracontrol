@@ -31,6 +31,7 @@ const ID = {
   RelinquishFullControl: 215, ClientDisconnect: 216, InformSleepMode: 244,
   InformBSEMode: 247, InformForce8BPPMode: 246, InformNativeCapable: 248,
   OemPowerControlAction: 65, SequenceNumberOut: 239,
+  StorageClientConnect: 153, StorageClientDisconnect: 154, StorageStatus: 137,
 };
 
 const SIG_EMBEDDED = 0x5A5A5A5A;
@@ -423,6 +424,47 @@ export class IrmcClient {
     this.send(b);
   }
   power(action) { this.sendCmd(ID.OemPowerControlAction); this.send(Buffer.from([action & 0xFF])); }
+
+  // === Storage / монтирование ISO (п.10) ===
+  // StorageClientConnect (153) — сообщаем iRMC, что образ лежит на
+  // инфра-сервере: адрес/порт нашего 5901-слушателя + sharePath/тип.
+  // Формат payload из декомпиляции StorageClientConnect.writeBuffer().
+  // Типы: DT_CD_ISO_IMAGE=11, DT_DVD_ISO_IMAGE=12;
+  // read-only варианты = 0x80 | base (для CD 0x8B=139).
+  static DT_CD_ISO_IMAGE = 11;
+  static DT_CD_ISO_IMAGE_RO = 139;
+  static DT_DVD_ISO_IMAGE = 12;
+  static unitStr(s, pad = 512) {
+    // Unicode (UTF-16BE) строка, дополненная нулями до pad байт
+    const b = Buffer.alloc(pad);
+    const enc = Buffer.from(String(s ?? ''), 'utf16le');
+    // iRMC ждёт UTF-16BE -> переворачиваем пары байт
+    for (let i = 0; i + 1 < enc.length; i += 2) { b[i] = enc[i + 1]; b[i + 1] = enc[i]; }
+    return b;
+  }
+  storageClientConnect({ ip = Buffer.alloc(16), port = 5901, shareType = 139, sharePath = '', index = 0 }) {
+    const ipb = Buffer.alloc(16);
+    Buffer.isBuffer(ip) && ip.copy(ipb, 16 - ip.length);
+    const p = Buffer.concat([
+      ipb,
+      Buffer.from([index === 0 ? 0 : 1, index === 1 ? 1 : (index === 0 ? 0 : 0x0f)]), // shareIndex0/1
+      this.le16(port),
+      Buffer.from([Buffer.byteLength(sharePath), 0]), // len0/len1
+      Buffer.from([shareType & 0xFF, 0x0f]),          // shareType0/1 (0x0f = none)
+      Buffer.from([1]),                                // ipType = IPv4
+      Buffer.from([0]),                                // uid
+      Buffer.from([1]),                                // sequence
+      Buffer.alloc(5),                                 // reserved[5]
+      this.unitStr(sharePath),                         // sharePath0 (512)
+      this.unitStr(''),                                // sharePath1 (512)
+    ]);
+    this.send(this.command(ID.StorageClientConnect, p));
+  }
+  // StorageClientDisconnect (154) — отмонтирование
+  storageClientDisconnect() {
+    this.send(this.command(ID.StorageClientDisconnect, Buffer.from([0])));
+  }
+
 
   close() {
     this.connected = false;

@@ -5,6 +5,8 @@
 // Saved servers (with encrypted credentials) let you test without re-typing.
 
 import http from 'node:http';
+import net from 'node:net';
+import { networkInterfaces } from 'node:os';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -254,6 +256,8 @@ const server = http.createServer(async (req, res) => {
     try {
       await startSession(sess, stored.host, stored.username, stored.password || '', stored.port, stored.secure);
       await waitLive(sess, 10000);
+      // если у сервера есть активный маунт — дослать 153 по свежей сессии
+      try { const m = await storage.getMount(body.serverId); if (m) realMount(body.serverId, stored.host, m); } catch {}
       return json(res, 200, { ok: true, token: sess.token, name: sess.name, host: sess.host, width: sess.width, height: sess.height, state: sess.state });
     } catch (e) {
       sess.manualClose = true; // первичный коннект не удался — не крутим реконнекты
@@ -458,6 +462,100 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': img.size, 'cache-control': 'no-store' });
     img.stream.pipe(res);
     return;
+  }
+
+  // === Монтирование ISO: состояние «что примонтировано» (п.10/10.5) ===
+  // Реальный проброс: наш IP, приёмный сервер 5901 (отдаём ISO по запросу
+  // iRMC), команды 153/154 по активной KVM-сессии сервера.
+  function localIPv4() {
+    for (const list of Object.values(networkInterfaces())) {
+      for (const i of list || []) {
+        if (!i.internal && i.family === 'IPv4') return i.address;
+      }
+    }
+    return '127.0.0.1';
+  }
+  let isoStoreServer = null;
+  function ensureIsoServer() {
+    if (isoStoreServer) return;
+    isoStoreServer = net.createServer((sock) => {
+      // какой образ отдать: берём самый свежий активный маунт
+      (async () => {
+        const mounts = await storage.getMounts();
+        let key = null, best = null;
+        for (const [k, m] of Object.entries(mounts)) if (!best || m.ts > best.ts) { best = m; key = k; }
+        if (!best) { sock.destroy(); return; }
+        const img = await iso.openImage(best.isoId);
+        if (!img) { sock.destroy(); return; }
+        img.stream.on('error', () => sock.destroy());
+        sock.on('error', () => img.stream.destroy());
+        img.stream.pipe(sock);
+      })().catch(() => sock.destroy());
+    });
+    isoStoreServer.on('error', () => {});
+    try { isoStoreServer.listen(5901, '0.0.0.0'); } catch {}
+  }
+  function sessionForServer(host) {
+    const token = sessionsByHost.get(host);
+    const s = token && sessions.get(token);
+    return (s && s.cli) ? s.cli : null;
+  }
+  function realMount(serverId, host, isoMeta) {
+    ensureIsoServer();
+    const cli = sessionForServer(host);
+    if (!cli) return false; // реальный проброс возможен при активной сессии
+    cli.storageClientConnect({
+      ip: Buffer.from(localIPv4().split('.').map(Number)),
+      port: 5901,
+      shareType: IrmcClient.DT_CD_ISO_IMAGE_RO,
+      sharePath: isoMeta.name,
+    });
+    return true;
+  }
+  function realUnmount(host) {
+    const cli = sessionForServer(host);
+    if (cli) cli.storageClientDisconnect();
+  }
+  // Список монтирований (все серверы) — с именами серверов/образов
+  if (url.pathname === '/api/mounts' && req.method === 'GET') {
+    const list = await listServers(false);
+    const byId = {}; for (const s of list) byId[s.id] = s.name || s.host;
+    const mounts = await storage.getMounts();
+    const out = Object.entries(mounts).map(([serverId, m]) => ({
+      serverId, isoId: m.isoId, isoName: m.isoName, ts: m.ts, by: m.by || null,
+      serverName: byId[serverId] || serverId,
+    }));
+    return json(res, 200, { ok: true, mounts: out });
+  }
+  // Примонтировать (admin): {serverId, isoId}
+  if (url.pathname === '/api/mounts' && req.method === 'PUT') {
+    if (req.user.role !== 'admin') return json(res, 403, { ok: false, error: 'права администратора' });
+    const body = await readJson(req, res);
+    if (!body || !body.serverId || !body.isoId) return json(res, 400, { ok: false, error: 'serverId и isoId обязательны' });
+    const list = await listServers(false);
+    const srv = list.find((s) => s.id === body.serverId);
+    if (!srv) return json(res, 404, { ok: false, error: 'server не найден' });
+    const img = await iso.openImage(body.isoId);
+    if (!img) return json(res, 404, { ok: false, error: 'ISO не найден' });
+    const stale = img.stream; try { stale.destroy(); } catch { }
+    const m = await storage.setMount(body.serverId, img.meta, req.user?.login || null);
+    const real = realMount(body.serverId, srv.host, img.meta);
+    await storage.addEvent('info', `Примонтирован ISO «${img.meta.name}» к ${srv.name || srv.host}` + (real ? '' : ' (ожидает открытой сессии)'), body.serverId);
+    return json(res, 200, { ok: true, mount: m, real });
+  }
+  // Отмонтировать (admin)
+  if (url.pathname.startsWith('/api/mounts/') && req.method === 'DELETE') {
+    if (req.user.role !== 'admin') return json(res, 403, { ok: false, error: 'права администратора' });
+    const serverId = decodeURIComponent(url.pathname.slice('/api/mounts/'.length));
+    const m = await storage.getMount(serverId);
+    if (m) {
+      const list = await listServers(false);
+      const srv = list.find((s) => s.id === serverId);
+      if (srv) realUnmount(srv.host);
+    }
+    const ok = await storage.clearMount(serverId);
+    if (ok) await storage.addEvent('info', 'Отмонтирован ISO', serverId);
+    return json(res, ok ? 200 : 404, { ok });
   }
 
   if (url.pathname === '/api/discover' && req.method === 'POST') {
