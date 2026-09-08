@@ -114,6 +114,10 @@ table.si.utable td .ucell .sub{font-size:11.5px;color:var(--faint)}
 .mount-metrics .mm-dot{width:7px;height:7px;border-radius:50%;background:#c8cdd6;flex:none}
 .mount-metrics .mm-dot.live{background:#2ea56d;box-shadow:0 0 0 0 rgba(46,165,109,.5);animation:livePulse 1.6s infinite}
 @keyframes livePulse{0%{box-shadow:0 0 0 0 rgba(46,165,109,.45)}70%{box-shadow:0 0 0 6px rgba(46,165,109,0)}100%{box-shadow:0 0 0 0 rgba(46,165,109,0)}}
+.sen-sum{display:flex;gap:10px;flex-wrap:wrap}
+.sen-chip{font-size:12.5px;color:var(--text);background:var(--gray-bg);border:1px solid var(--border);border-radius:8px;padding:8px 12px}
+.sen-chip b{font-variant-numeric:tabular-nums}
+.sen-chip .hot{color:#e5484d}
 
 .split{display:grid;grid-template-columns:340px 1fr;gap:20px;align-items:start}
 .tree-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 10px 18px}
@@ -416,6 +420,11 @@ table.si td.v{font-weight:500;color:#333c49;white-space:pre-wrap;word-break:brea
                   <div class="kpi"><div class="lab">Серийный №</div><div class="val" id="kpiSerial">—</div><div class="sub" id="kpiSerialSub">Система</div></div>
                 </div>
 
+                <div class="panel" style="margin-top:12px">
+                  <div class="ph">Сенсоры IPMI <span class="state" id="senInfo"></span></div>
+                  <div class="sen-sum" id="senSummary"></div>
+                </div>
+
                 <div class="two">
                   <div class="panel">
                     <div class="ph">Информация о системе <span class="state" id="invState"></span></div>
@@ -469,7 +478,14 @@ table.si td.v{font-weight:500;color:#333c49;white-space:pre-wrap;word-break:brea
                 <div class="placeholder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2-6 4 12 2-6h6"/></svg><div class="tt">Состояние</div><div class="ds">Модуль в разработке.</div></div>
               </div>
               <div class="tabpane" id="pane-hardware" style="display:none">
-                <div class="placeholder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M7 4v5"/></svg><div class="tt">Оборудование</div><div class="ds">Модуль в разработке.</div></div>
+                <div class="panel">
+                  <div class="ph">Оборудование (инвентарь)</div>
+                  <table class="si" id="hwTable"></table>
+                </div>
+                <div class="panel" style="margin-top:12px">
+                  <div class="ph">Сенсоры IPMI <span class="state" id="snInfo"></span></div>
+                  <table class="si" id="snTable"></table>
+                </div>
               </div>
               <div class="tabpane" id="pane-network" style="display:none">
                 <div class="placeholder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5 5 0 0 1 7 0"/></svg><div class="tt">Сеть</div><div class="ds">Модуль в разработке.</div></div>
@@ -756,6 +772,7 @@ function select(id){
   sel=id; renderTree();
   showDetail();
   loadInv(id);
+  loadSensors(id);
   showConsole(); // консоль выбранного сервера или заглушка
 }
 function hideDetail(){$('detBody').style.display='none';$('emptyHint').style.display='flex';}
@@ -795,6 +812,7 @@ function renderDetail(){
     $('kpiVer').textContent='';
   }
   renderSI(inv);
+  renderHWTable(inv);
   $('invState').textContent=(st==='on'?'данные получены':(st==='err'?'сервер недоступен':(st==='off'&&dbgLastKnown[sel]?'данные из базы':'проверка…')))+(dbgLastKnown[sel]?(' · снимок от '+fmtDump(dbgLastKnown[sel])):'');;
 }
 
@@ -832,6 +850,54 @@ function renderSI(inv){
     }
   }
   t.innerHTML=html;
+}
+
+// Инвентарь в «Оборудование» (полная таблица, как renderSI)
+function renderHWTable(inv){
+  const t=$('hwTable'); if(!t)return;
+  let h='';
+  for(const row of SI_ROWS){ const v=inv?valFrom(inv,row.src):''; h+='<tr><td class="k">'+row.k+'</td><td class="v">'+(v||'—')+'</td></tr>'; }
+  if(inv){
+    const covered=/^(system manufacturer|manufacturer|producer|vendor|system type|model|model name|product name|serial|serial number|system serial number|bios version|bios version\/date|bios|bios revision|bmc|bmc version|ipmi firmware|bmc firmware version|firmware|system guid|guid|uuid|system uuid|system name|host name|hostname|system description|description|system o\/s|os|operating system|os name|system ip|ip|system ip address|system asset tag|asset tag|asset|power led|error led)$/i;
+    for(const k in inv){ if(covered.test(k)||!inv[k])continue; h+='<tr><td class="k">'+esc(k)+'</td><td class="v">'+esc(inv[k])+'</td></tr>'; }
+  }
+  t.innerHTML=h;
+}
+
+function hotCls(v){ return v>=45 ? ' class="hot"' : ''; }
+// Дашборд-сенсоры (Обзор) + полная таблица (Оборудование); IPMI-LAN (UDP), KVM не трогает.
+async function loadSensors(id){
+  if(!id)return;
+  const porig=id;
+  const si=$('senInfo'), sum=$('senSummary'), sn=$('snTable'), snInfo=$('snInfo');
+  const j=await api('/api/ipmi/sensors?serverId='+encodeURIComponent(id),{_noKick:true});
+  if(id!==sel)return;
+  if(!j||!j.ok||!(j.temps||j.fans)){
+    const msg='нет данных опроса'+(j&&j.error?(' ('+esc(j.error)+')'):'');
+    if(si)si.textContent=msg; if(snInfo)snInfo.textContent=msg;
+    if(sum)sum.innerHTML='<div class="sen-chip">'+msg+'</div>';
+    if(sn)sn.innerHTML='<tr><td class="v">—</td></tr>';
+    return;
+  }
+  const when=j.ts?('· обновлено '+fmtDump(new Date(j.ts).toISOString())):'';
+  if(si)si.textContent=when; if(snInfo)snInfo.textContent=when+(j.error?(' · '+esc(j.error)):'');
+  // Дашборд (Обзор): краткие ключевые
+  if(sum){
+    const cpus=j.temps.filter(t=>/^CPU/i.test(t.name));
+    const sys=j.temps.filter(t=>/System|Board|Ambient/i.test(t.name));
+    const fans=j.fans||[];
+    const chip=(label,arr,unit)=>'<div class="sen-chip"><b>'+esc(label)+':</b> '+(arr.length?arr.map(t=>esc(t.name)+'='+'<b'+hotCls(t.value)+'>'+t.value+'</b>'+unit).join(', '):'—')+'</div>';
+    sum.innerHTML=chip('CPU',cpus,'°C')+chip('Система',sys,'°C')+chip('Кулеры',fans,' RPM');
+    if(j.temps && j.temps.length) sum.insertAdjacentHTML('beforeend','<div class="sen-chip">Всего темп: '+j.temps.length+'</div>');
+  }
+  // Полная таблица (Оборудование)
+  if(sn){
+    let h='<tr><td class="k">Тип</td><td class="k">Сенсор</td><td class="v">Значение</td></tr>';
+    for(const t of j.temps) h+='<tr><td>Темп</td><td>'+esc(t.name)+'</td><td><b'+hotCls(t.value)+'>'+t.value+'</b> °C</td></tr>';
+    for(const f of j.fans) h+='<tr><td>Кулер</td><td>'+esc(f.name)+'</td><td>'+f.value+' RPM</td></tr>';
+    sn.innerHTML=h;
+  }
+  renderHWTable(dbgInv[id]||null);
 }
 
 async function loadInv(id){
@@ -909,7 +975,7 @@ function switchTab(name){
   $('pane-'+tab).style.display='block';
   showConsole();
   if(tab==='storage') renderStorage();
-  if(tab==='overview'){try{$('cvwrap').parentElement.scrollIntoView({block:'nearest'});}catch{}}
+  if(tab==='overview'||tab==='hardware'){ try{ loadSensors(sel); }catch{} ; if(tab==='overview'){try{$('cvwrap').parentElement.scrollIntoView({block:'nearest'});}catch{} } }
 }
 $('tabs').addEventListener('click',(e)=>{
   const t=e.target.closest('.tab'); if(!t)return;

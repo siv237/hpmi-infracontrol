@@ -7,11 +7,13 @@
 import http from 'node:http';
 import net from 'node:net';
 import { readFile } from 'node:fs/promises';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { IrmcClient, testIrmc } from './irmc.js';
+import * as ipmi from './ipmi.js';
 import { listServers, saveServer, deleteServer, getServer, updateServer } from './store.js';
 import { listUsers, saveUser, updateUser, deleteUser, verifyPasswordByLogin, updatePassword, migrateLegacy } from './users-store.js';
 import { decrypt as decryptLegacyBox, getKey } from './crypto-box.js';
@@ -25,6 +27,29 @@ import * as m2 from './m2.js';
 const PORT = Number(process.env.PORT || 1845);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
+
+// === История метрик/сенсоров (БД, p.5) — data/metrics.json (вне git) =======
+// Храним ряд точек по каждому сенсору каждого сервера (ring-буфер, cap).
+// Пишется интервальным IPMI-LAN опросом; не касается KVM/AVR, поэтому сессии
+// не убиваются.
+const METRICS_FILE = path.join(ROOT, 'data', 'metrics.json');
+const METRICS_CAP = 720; // ~12 часов при опросе раз в 60с на один сенсор
+let metrics = {};        // serverId -> { metric: [[ts, value], ...] }
+let metricsLoaded = false;
+function loadMetricsSync() {
+  try { metrics = JSON.parse(readFileSync(METRICS_FILE, 'utf8')); }
+  catch { metrics = {}; }
+  metricsLoaded = true;
+}
+function saveMetricsSync() {
+  try { writeFileSync(METRICS_FILE, JSON.stringify(metrics)); } catch {}
+}
+function pushMetric(serverId, name, ts, value) {
+  const s = (metrics[serverId] = metrics[serverId] || {});
+  const arr = (s[name] = s[name] || []);
+  arr.push([ts, value]);
+  if (arr.length > METRICS_CAP) s[name] = arr.slice(arr.length - METRICS_CAP);
+}
 
 // Офлайн-хранилище (слой A, без мониторинга): снимки last-known, события,
 // история версий — только по факту подключения. data/storage.json (вне git).
@@ -499,6 +524,33 @@ const server = http.createServer(async (req, res) => {
     const r = await m2.recover();
     return json(res, r.ok ? 200 : 409, r);
   }
+  // Метрики по IPMI (p.5): сенсоры (темп/кулеры) из кеша интервального опроса
+  if (url.pathname === '/api/ipmi/sensors' && req.method === 'GET') {
+    const serverId = new URL(req.url, 'http://x').searchParams.get('serverId');
+    if (serverId) {
+      const c = sensorCache.get(serverId);
+      if (c) return json(res, 200, { ok: true, ...c });
+      return json(res, 404, { ok: false, error: 'нет данных опроса' });
+    }
+    const out = {};
+    for (const [id, s] of sensorCache) out[id] = s;
+    return json(res, 200, { ok: true, sensors: out });
+  }
+  // История сенсоров (БД) по серверу: серия [ts, value] на каждый сенсор
+  if (url.pathname === '/api/ipmi/metrics' && req.method === 'GET') {
+    if (!metricsLoaded) loadMetricsSync();
+    const serverId = new URL(req.url, 'http://x').searchParams.get('serverId');
+    const list = metrics[serverId] ? { [serverId]: metrics[serverId] } : {};
+    // lastValues — последние точки по каждому сенсору
+    const lastValues = {};
+    for (const [id, s] of Object.entries(list)) {
+      lastValues[id] = {};
+      for (const [metric, arr] of Object.entries(s)) {
+        if (arr && arr.length) lastValues[id][metric] = arr[arr.length - 1];
+      }
+    }
+    return json(res, 200, { ok: true, series: list, lastValues });
+  }
   // Примонтировать (admin): {serverId, isoId}
   if (url.pathname === '/api/mounts' && req.method === 'PUT') {
     if (req.user.role !== 'admin') return json(res, 403, { ok: false, error: 'права администратора' });
@@ -790,6 +842,37 @@ server.listen(PORT, () => {
   console.log('Left panel: servers. Right: details + Launch console (noVNC).');
   console.log('GET /api/servers lists stored servers (credentials encrypted at rest).');
 });
+
+// === Метрики по IPMI (p.5, восстановлено): интервальный опрос по LAN =====
+// RMCP+/UDP (623/664), отдельный канал — НЕ трогает AVR/TCP-консоль, поэтому
+// не блокирует и не ломает KVM-сессии вьювера (прежняя причина заморозки).
+const sensorCache = new Map();   // serverId -> {ts, temps, fans, error}
+let sensorBusy = false;
+async function pollSensors() {
+  if (sensorBusy) return;
+  sensorBusy = true;
+  try {
+    if (!metricsLoaded) loadMetricsSync();
+    const list = await listServers(false);
+    await Promise.all(list.filter((s) => s.host).map(async (s) => {
+      try {
+        const cfg = await getServer(s.id);
+        if (!cfg || !cfg.username) return;
+        const r = await ipmi.readSensors(cfg);
+        const ts = Date.now();
+        sensorCache.set(s.id, { ts, temps: r.temps, fans: r.fans, error: null });
+        for (const t of r.temps) pushMetric(s.id, 'temp:' + t.name, ts, t.value);
+        for (const f of r.fans) pushMetric(s.id, 'fan:' + f.name, ts, f.value);
+        saveMetricsSync();
+      } catch (e) {
+        sensorCache.set(s.id, { ts: Date.now(), temps: [], fans: [], error: String((e && e.message) || e) });
+      }
+    }));
+  } finally { sensorBusy = false; }
+}
+setInterval(pollSensors, 60000);
+pollSensors();
+
 
 // Graceful shutdown (слой A): при остановке закрываем все консольные
 // сессии к iRMC (ClientDisconnect 0xd8), чтобы не оставлять висящие сессии.
