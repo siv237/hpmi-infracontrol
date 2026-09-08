@@ -227,11 +227,26 @@
             <div class="pane">
               <!-- OVERVIEW -->
               <div class="tabpane" id="pane-overview">
-                <div class="grid">
+                <div class="grid grid-status">
                   <div class="kpi"><div class="lab">Состояние</div><div class="val" id="kpiState">—</div><div class="sub">IPMI</div></div>
                   <div class="kpi"><div class="lab">IPMI IP</div><div class="val" id="kpiIp">—</div><div class="sub" id="kpiVer">—</div></div>
                   <div class="kpi"><div class="lab">Модель</div><div class="val" id="kpiModel">—</div><div class="sub" id="kpiSub">—</div></div>
                   <div class="kpi"><div class="lab">Серийный №</div><div class="val" id="kpiSerial">—</div><div class="sub" id="kpiSerialSub">Система</div></div>
+                </div>
+
+                <div class="grid grid-metrics">
+                  <div class="kpi kpi-m"><div class="lab">Температура</div>
+                    <div class="val" id="mTemp">—</div><div class="sub" id="mTempSub">CPU, среднее</div>
+                    <canvas class="mchart" id="mTempChart"></canvas></div>
+                  <div class="kpi kpi-m"><div class="lab">Вентиляция</div>
+                    <div class="val" id="mFan">—</div><div class="sub" id="mFanSub">Скорость</div>
+                    <canvas class="mchart" id="mFanChart"></canvas></div>
+                  <div class="kpi kpi-m"><div class="lab">Отклик IPMI</div>
+                    <div class="val" id="mResp">—</div><div class="sub" id="mRespSub">время ответа</div>
+                    <canvas class="mchart" id="mRespChart"></canvas></div>
+                  <div class="kpi kpi-m"><div class="lab">Доступность</div>
+                    <div class="val" id="mAvail">—</div><div class="sub" id="mAvailSub">за 24 ч</div>
+                    <canvas class="mchart" id="mAvailChart"></canvas></div>
                 </div>
 
                 <div class="two">

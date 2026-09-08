@@ -720,3 +720,22 @@ Java↔M2 и проводной M2↔iRMC протоколы, JSON-эмуляц�
   `showPage(restorePage)` → `restoreDetail(savedSel)` восстанавливает сервер+вкладку
   карточки. BUGS.md->закрыт.
 - `npm test` (node:test, 24 теста) — 0 fail.
+
+## [2026-09-08] project | Карточки-метрики с графиками во «Обзоре» сервера
+- По макету InfraControl (reference_design 4 сент.): во вкладке «Обзор» карточки
+  сервера получили второй ряд — 4 карточки-метрики с мини-спарклайнами:
+  **Температура** (среднее по CPU-сенсорам, красный при ≥45°C), **Вентиляция**
+  (среднее RPM), **Отклик IPMI** (response_ms), **Доступность** (% успешных
+  ping за 24ч; жёлтый при <99%).
+- Данные — реальная история из SQLite (server/metrics.js, интервальный опрос
+  60с): новые `avgSeries(serverId, prefix, windowSec)` — усреднение рядов по
+  префиксу имени (temp:/fan: поимённые сенсоры → один ряд), эндпоинт
+  `/api/ipmi/metrics?serverId=` теперь отдаёт {temps,fans,response_ms,ping,
+  availPct,lastValues} (прежний пустой `series('temp')` убран — его никто не
+  читал).
+- Фронт: `loadMetrics()` в web/js/ipmi.js (спарклайны canvas + децимация до
+  120 точек), CSS `.kpi-m/.mchart` в servers.css; вызовы из select(),
+  switchTab('overview') и «Обновить данные». CPU%/память/питание (ватты) в
+  IPMI SDR отсутствуют — карточки НЕ рисуем, данные не выдумываем.
+- Проверка: read-only проб SQLite (3 сервера, ~980 точек/24ч, 23-35°C,
+  5-6 тыс RPM), `npm test` 24/24.

@@ -557,11 +557,23 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/ipmi/metrics' && req.method === 'GET') {
     const serverId = new URL(req.url, 'http://x').searchParams.get('serverId');
     const windowSec = Math.min(Number(new URL(req.url, 'http://x').searchParams.get('window')) || 86400, 30 * 86400);
-    if (serverId) return json(res, 200, { ok: true, series: metrics.series(serverId, 'temp', windowSec), lastValues: metrics.lastValues()[serverId] || {} });
-    const allSeries = {};
-    const allLast = metrics.lastValues();
-    for (const id of Object.keys(allLast)) allSeries[id] = metrics.series(id, 'temp', windowSec);
-    return json(res, 200, { ok: true, series: allSeries, lastValues: allLast });
+    const build = (sid) => {
+      const ping = metrics.series(sid, 'ping', windowSec);
+      const up = ping.filter((r) => r[1] >= 1).length;
+      return {
+        temps: metrics.avgSeries(sid, 'temp:', windowSec),
+        fans: metrics.avgSeries(sid, 'fan:', windowSec),
+        response_ms: metrics.series(sid, 'response_ms', windowSec),
+        ping,
+        availPct: ping.length ? Math.round((100 * up) / ping.length * 10) / 10 : null,
+        lastValues: metrics.lastValues()[sid] || {},
+      };
+    };
+    if (serverId) return json(res, 200, { ok: true, ...build(serverId) });
+    const out = {};
+    const sids = Object.keys(metrics.lastValues());
+    for (const sid of sids) out[sid] = build(sid);
+    return json(res, 200, { ok: true, series: out });
   }
   // Примонтировать (admin): {serverId, isoId}
   if (url.pathname === '/api/mounts' && req.method === 'PUT') {

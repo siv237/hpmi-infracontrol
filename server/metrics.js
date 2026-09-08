@@ -82,6 +82,21 @@ export function series(serverId, metric, windowSec = 86400, ts = Date.now()) {
   return stmts.series.all(serverId, metric, from).map((r) => [r.ts, r.value]);
 }
 
+// Усреднённый ряд по префиксу имени (напр. 'temp:' = CPU-темпы, 'fan:' = RPM).
+// IPMI пишет сенсоры по имени: temp:CPU1, temp:CPU2, fan:FAN1 и т.д. Для карточек
+// «Температура»/«Вентиляция» берём среднее по всем сенсорам данного типа на
+// каждый момент опроса. Нет данных -> [].
+export function avgSeries(serverId, prefix, windowSec = 86400, ts = Date.now()) {
+  if (!stmts) initMetrics();
+  const from = ts - windowSec * 1000;
+  const like = prefix.replace(/[%_]/g, '\\$&') + '%';
+  const rows = db.prepare(`
+    SELECT ts, AVG(value) AS value, COUNT(*) AS n
+    FROM metrics WHERE server_id = ? AND metric LIKE ? ESCAPE '\\' AND ts >= ?
+    GROUP BY ts ORDER BY ts ASC`).all(serverId, like, from);
+  return rows.map((r) => [r.ts, r.value, r.n]);
+}
+
 // Последние значения по каждому серверу (текущее состояние)
 export function lastValues() {
   if (!stmts) initMetrics();

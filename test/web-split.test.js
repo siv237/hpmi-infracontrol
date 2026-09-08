@@ -60,7 +60,7 @@ const EXPECTED_FUNCTIONS = [
   // detail
   'select','hideDetail','showDetail','renderDetail','trustKeys','valFrom','renderSI','renderHWTable',
   // ipmi
-  'hotCls','loadSensors',
+  'hotCls','loadSensors','loadMetrics','setMetric','setMetricSub','drawSpark','clearChart','tempChart','fanChart','respChart','avChart',
   // inventory
   'loadInv','fmtDump','showVersionHistory',
   // tabs

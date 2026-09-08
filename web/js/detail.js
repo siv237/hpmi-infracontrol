@@ -5,6 +5,7 @@ function select(id){
   showDetail();
   loadInv(id);
   loadSensors(id);
+  loadMetrics(id);
   showConsole(); // консоль выбранного сервера или заглушка
 }
 function hideDetail(){$('detBody').style.display='none';$('emptyHint').style.display='flex';}
