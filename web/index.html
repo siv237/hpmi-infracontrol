@@ -114,10 +114,26 @@ table.si.utable td .ucell .sub{font-size:11.5px;color:var(--faint)}
 .mount-metrics .mm-dot{width:7px;height:7px;border-radius:50%;background:#c8cdd6;flex:none}
 .mount-metrics .mm-dot.live{background:#2ea56d;box-shadow:0 0 0 0 rgba(46,165,109,.5);animation:livePulse 1.6s infinite}
 @keyframes livePulse{0%{box-shadow:0 0 0 0 rgba(46,165,109,.45)}70%{box-shadow:0 0 0 6px rgba(46,165,109,0)}100%{box-shadow:0 0 0 0 rgba(46,165,109,0)}}
-.sen-sum{display:flex;gap:10px;flex-wrap:wrap}
 .sen-chip{font-size:12.5px;color:var(--text);background:var(--gray-bg);border:1px solid var(--border);border-radius:8px;padding:8px 12px}
 .sen-chip b{font-variant-numeric:tabular-nums}
-.sen-chip .hot{color:#e5484d}
+/* дашборд «Обзор» (главное меню, п.1) */
+.ov-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:14px}
+.ov-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 18px}
+.ov-card .v{font-size:26px;font-weight:700;letter-spacing:-.5px}
+.ov-card .l{font-size:12px;color:var(--muted);margin-top:2px}
+.ov-card.ok .v{color:#188a4c}.ov-card.bad .v{color:var(--red)}
+.dash-grid{display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-bottom:14px}
+.dash-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 18px;min-width:0}
+.dc-head{font-size:13px;font-weight:600;color:var(--fg);margin-bottom:10px}
+.dc-sub{font-weight:400;color:var(--faint);font-size:11.5px}
+.ov-events{max-height:260px;overflow:auto;display:flex;flex-direction:column;gap:6px;font-size:12.5px}
+.ov-events .ev{display:flex;gap:8px;line-height:1.35}
+.ov-events .t{color:var(--faint);flex:none;font-variant-numeric:tabular-nums}
+.ov-events .k-down,.ov-events .k-err{color:var(--red)}.ov-events .k-up,.ov-events .k-ok,.ov-events .k-info{color:#188a4c}.ov-events .k-change,.ov-events .k-power,.ov-events .k-warn{color:#b06a00}
+.ov-table{width:100%;border-collapse:collapse;font-size:13px}
+.ov-table th{font-size:11.5px;font-weight:600;color:var(--muted);text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)}
+.ov-table td{padding:7px 8px;border-bottom:1px solid var(--gray-bg);vertical-align:middle}
+.ov-empty{color:var(--faint);text-align:center;padding:14px}
 
 .split{display:grid;grid-template-columns:340px 1fr;gap:20px;align-items:start}
 .tree-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 10px 18px}
@@ -351,6 +367,34 @@ table.si td.v{font-weight:500;color:#333c49;white-space:pre-wrap;word-break:brea
     </header>
 
     <main class="content">
+      <!-- СТРАНИЦА: ОБЗОР (дашборд главного меню, п.1) -->
+      <div class="page" id="page-overview" style="display:none">
+        <div class="page-head"><h1>Обзор</h1></div>
+        <div class="ov-cards">
+          <div class="ov-card"><div class="v" id="ovTotal">—</div><div class="l">Серверов</div></div>
+          <div class="ov-card ok"><div class="v" id="ovUp">—</div><div class="l">Доступно</div></div>
+          <div class="ov-card bad"><div class="v" id="ovDown">—</div><div class="l">Недоступно</div></div>
+          <div class="ov-card"><div class="v" id="ovNone">—</div><div class="l">Нет данных</div></div>
+        </div>
+        <div class="dash-grid">
+          <div class="dash-card">
+            <div class="dc-head">События</div>
+            <div class="ov-events" id="ovEvents"><div class="ov-empty">Загрузка…</div></div>
+          </div>
+          <div class="dash-card">
+            <div class="dc-head">Сенсоры IPMI <span class="dc-sub">(живой опрос по LAN)</span></div>
+            <div class="ov-events" id="ovSensors"><div class="ov-empty">Загрузка…</div></div>
+          </div>
+        </div>
+        <div class="dash-card">
+          <div class="dc-head">Серверы</div>
+          <table class="ov-table">
+            <thead><tr><th>Сервер</th><th>Адрес</th><th>Статус</th><th>Инвентарь</th><th>Снимок</th></tr></thead>
+            <tbody id="ovRows"><tr><td colspan="5" class="ov-empty">Загрузка…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
       <!-- СТРАНИЦА: СЕРВЕРЫ -->
       <div class="page" id="page-servers">
       <div class="split">
@@ -420,11 +464,6 @@ table.si td.v{font-weight:500;color:#333c49;white-space:pre-wrap;word-break:brea
                   <div class="kpi"><div class="lab">Серийный №</div><div class="val" id="kpiSerial">—</div><div class="sub" id="kpiSerialSub">Система</div></div>
                 </div>
 
-                <div class="panel" style="margin-top:12px">
-                  <div class="ph">Сенсоры IPMI <span class="state" id="senInfo"></span></div>
-                  <div class="sen-sum" id="senSummary"></div>
-                </div>
-
                 <div class="two">
                   <div class="panel">
                     <div class="ph">Информация о системе <span class="state" id="invState"></span></div>
@@ -475,16 +514,15 @@ table.si td.v{font-weight:500;color:#333c49;white-space:pre-wrap;word-break:brea
                 </div>
               </div>
               <div class="tabpane" id="pane-health" style="display:none">
-                <div class="placeholder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2-6 4 12 2-6h6"/></svg><div class="tt">Состояние</div><div class="ds">Модуль в разработке.</div></div>
+                <div class="panel">
+                  <div class="ph">Сенсоры IPMI <span class="state" id="snInfo"></span></div>
+                  <table class="si" id="snTable"></table>
+                </div>
               </div>
               <div class="tabpane" id="pane-hardware" style="display:none">
                 <div class="panel">
                   <div class="ph">Оборудование (инвентарь)</div>
                   <table class="si" id="hwTable"></table>
-                </div>
-                <div class="panel" style="margin-top:12px">
-                  <div class="ph">Сенсоры IPMI <span class="state" id="snInfo"></span></div>
-                  <table class="si" id="snTable"></table>
                 </div>
               </div>
               <div class="tabpane" id="pane-network" style="display:none">
@@ -865,39 +903,27 @@ function renderHWTable(inv){
 }
 
 function hotCls(v){ return v>=45 ? ' class="hot"' : ''; }
-// Дашборд-сенсоры (Обзор) + полная таблица (Оборудование); IPMI-LAN (UDP), KVM не трогает.
+// Таблица сенсоров (вкладка «Состояние»); IPMI-LAN (UDP), KVM не трогает.
 async function loadSensors(id){
   if(!id)return;
   const porig=id;
-  const si=$('senInfo'), sum=$('senSummary'), sn=$('snTable'), snInfo=$('snInfo');
+  const sn=$('snTable'), snInfo=$('snInfo');
   const j=await api('/api/ipmi/sensors?serverId='+encodeURIComponent(id),{_noKick:true});
   if(id!==sel)return;
   if(!j||!j.ok||!(j.temps||j.fans)){
     const msg='нет данных опроса'+(j&&j.error?(' ('+esc(j.error)+')'):'');
-    if(si)si.textContent=msg; if(snInfo)snInfo.textContent=msg;
-    if(sum)sum.innerHTML='<div class="sen-chip">'+msg+'</div>';
+    if(snInfo)snInfo.textContent=msg;
     if(sn)sn.innerHTML='<tr><td class="v">—</td></tr>';
     return;
   }
   const when=j.ts?('· обновлено '+fmtDump(new Date(j.ts).toISOString())):'';
-  if(si)si.textContent=when; if(snInfo)snInfo.textContent=when+(j.error?(' · '+esc(j.error)):'');
-  // Дашборд (Обзор): краткие ключевые
-  if(sum){
-    const cpus=j.temps.filter(t=>/^CPU/i.test(t.name));
-    const sys=j.temps.filter(t=>/System|Board|Ambient/i.test(t.name));
-    const fans=j.fans||[];
-    const chip=(label,arr,unit)=>'<div class="sen-chip"><b>'+esc(label)+':</b> '+(arr.length?arr.map(t=>esc(t.name)+'='+'<b'+hotCls(t.value)+'>'+t.value+'</b>'+unit).join(', '):'—')+'</div>';
-    sum.innerHTML=chip('CPU',cpus,'°C')+chip('Система',sys,'°C')+chip('Кулеры',fans,' RPM');
-    if(j.temps && j.temps.length) sum.insertAdjacentHTML('beforeend','<div class="sen-chip">Всего темп: '+j.temps.length+'</div>');
-  }
-  // Полная таблица (Оборудование)
+  if(snInfo)snInfo.textContent=when+(j.error?(' · '+esc(j.error)):'');
   if(sn){
     let h='<tr><td class="k">Тип</td><td class="k">Сенсор</td><td class="v">Значение</td></tr>';
     for(const t of j.temps) h+='<tr><td>Темп</td><td>'+esc(t.name)+'</td><td><b'+hotCls(t.value)+'>'+t.value+'</b> °C</td></tr>';
     for(const f of j.fans) h+='<tr><td>Кулер</td><td>'+esc(f.name)+'</td><td>'+f.value+' RPM</td></tr>';
     sn.innerHTML=h;
   }
-  renderHWTable(dbgInv[id]||null);
 }
 
 async function loadInv(id){
@@ -975,7 +1001,8 @@ function switchTab(name){
   $('pane-'+tab).style.display='block';
   showConsole();
   if(tab==='storage') renderStorage();
-  if(tab==='overview'||tab==='hardware'){ try{ loadSensors(sel); }catch{} ; if(tab==='overview'){try{$('cvwrap').parentElement.scrollIntoView({block:'nearest'});}catch{} } }
+  if(tab==='health'){ try{ loadSensors(sel); }catch{} }
+  if(tab==='overview'){try{$('cvwrap').parentElement.scrollIntoView({block:'nearest'});}catch{}}
 }
 $('tabs').addEventListener('click',(e)=>{
   const t=e.target.closest('.tab'); if(!t)return;
@@ -1474,8 +1501,9 @@ function showPage(id){
   try{ localStorage.setItem('ui.page',id); }catch{}
   if(id==='users')loadUsers();
   if(id==='iso')loadIso();
+  if(id==='overview')startOverview();
 }
-const IMPLEMENTED=new Set(['servers','users','iso']);
+const IMPLEMENTED=new Set(['servers','users','iso','overview']);
 document.querySelectorAll('.nav-item').forEach(n=>{
   n.onclick=()=>{
     const id=n.getAttribute('data-id');
@@ -1489,6 +1517,52 @@ document.querySelectorAll('.nav-item').forEach(n=>{
 });
 $('globalSearch').oninput=(e)=>{$('treeSearch').value=e.target.value;renderTree();};
 $('treeSearch').oninput=()=>renderTree();
+
+// ---- дашборд «Обзор» (п.1): сводка серверов, события, сенсоры ----------
+let ovTimer=null;
+async function loadOverview(){
+  const j=await api('/api/overview',{_noKick:true});
+  const s=j&&j.ok&&j.summary?j.summary:{};
+  $('ovTotal').textContent=s.total??'—';
+  $('ovUp').textContent=s.on??'—';
+  $('ovDown').textContent=s.off??'—';
+  $('ovNone').textContent=s.none??'—';
+  const who={};(j.servers||[]).forEach(r=>who[r.id]=r.name||r.host);
+  $('ovRows').innerHTML=(j.servers||[]).length?(j.servers||[]).map(r=>{
+    const stCls=r.status==='on'?'on':(r.status==='off'?'off':'off');
+    const stTxt=r.status==='on'?'Онлайн':(r.status==='off'?'Обесточен':'Нет данных');
+    return '<tr><td><b>'+esc(r.name||r.host)+'</b></td><td>'+esc(r.host)+'</td>'
+      +'<td><span class="st '+stCls+'" style="display:inline-block;vertical-align:-2px"></span> '+stTxt+'</td>'
+      +'<td>'+(r.inventoryCount?r.inventoryCount+' полей':'—')+'</td>'
+      +'<td>'+(r.lastCheck?fmtDump(new Date(r.lastCheck)):'—')+'</td></tr>';
+  }).join(''):'<tr><td colspan="5" class="ov-empty">Серверы не добавлены</td></tr>';
+  const ev=await api('/api/events?limit=40',{_noKick:true});
+  $('ovEvents').innerHTML=(ev.ok&&(ev.events||[]).length?ev.events.map(e=>{
+    const d=new Date(e.ts);
+    const t=d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'})+(d.toDateString()!==new Date().toDateString()?' '+d.toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit'}):'');
+    return '<div class="ev"><span class="t">'+t+'</span><span class="k-'+esc(e.kind)+'">'+esc(e.kind==='info'||e.kind==='ok'?'✓ ':e.kind==='warn'?'⚠ ':(e.kind==='err'?'✕ ':''))+'</span><span>'+esc(e.text)+'</span></div>';
+  }).join(''):'<div class="ov-empty">Событий пока нет</div>');
+  loadOverviewSensors();
+}
+// Сводка сенсоров по всем серверам (IPMI-LAN, не трогает KVM)
+async function loadOverviewSensors(){
+  const j=await api('/api/ipmi/sensors',{_noKick:true});
+  const list=Object.values((j&&j.sensors)||{});
+  if(!list.length){ $('ovSensors').innerHTML='<div class="ov-empty">Данных опроса нет</div>'; return; }
+  $('ovSensors').innerHTML=list.map(x=>{
+    if(x.error) return '<div class="ev"><span class="t">'+fmtDump(x.ts?new Date(x.ts).toISOString():null)+'</span><span class="k-err">'+esc('✕ '+x.error.slice(0,60))+'</span></div>';
+    const cpu=(x.temps||[]).filter(t=>/^CPU/i.test(t.name));
+    const allT=x.temps||[];
+    const fans=x.fans||[];
+    const cpuS=cpu.length?cpu.map(t=>esc(t.name)+'='+t.value+'°C').join(', '):(allT.length?allT.length+' темп.':'—');
+    return '<div class="ev"><span class="t">'+fmtDump(x.ts?new Date(x.ts).toISOString():null)+'</span><span class="k-ok">CPU:</span><span>'+cpuS+' · кулеров: '+(fans.length||0)+'</span></div>';
+  }).join('')||'<div class="ov-empty">Данных опроса нет</div>';
+}
+function startOverview(){
+  if(ovTimer)clearInterval(ovTimer);
+  loadOverview();
+  ovTimer=setInterval(loadOverview,30000);
+}
 showConsole();
 startSnapshotLoop();
 renderEvents();
