@@ -1,0 +1,12 @@
+.ev-list{display:flex;flex-direction:column}
+.ev{display:flex;align-items:center;gap:12px;padding:10px 15px;border-bottom:1px solid var(--border2);font-size:13px}
+.ev:last-child{border-bottom:none}
+.ev .ic{width:18px;height:18px;flex:none;display:flex;align-items:center;justify-content:center}
+.ev .ic svg{width:17px;height:17px}
+.ev.info .ic{color:var(--accent)}
+.ev.warn .ic{color:var(--amber)}
+.ev.err .ic{color:var(--red)}
+.ev.ok .ic{color:var(--green)}
+.ev .txt{flex:1;min-width:0}
+.ev .txt b{font-weight:600}
+.ev .when{font-size:12px;color:var(--faint);white-space:nowrap}

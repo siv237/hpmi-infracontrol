@@ -761,6 +761,21 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // Статические модули фронтенда (разрез монолита index.html) — /css/* и /js/*.
+  // Не кэшируем: обновления должны применять сразу.
+  if (/^\/(css|js|img)\//.test(url.pathname)) {
+    const rel = url.pathname.slice(1);
+    const fpath = path.normalize(path.join(ROOT, 'web', rel));
+    if (!fpath.startsWith(path.join(ROOT, 'web'))) return plain(res, 'bad path', 403);
+    try {
+      const data = await readFile(fpath);
+      res.writeHead(200, { 'content-type': mimeFor(fpath), 'cache-control': 'no-store' });
+      return res.end(data);
+    } catch {
+      return plain(res, 'no asset', 404);
+    }
+  }
+
   plain(res, 'not found', 404);
 });
 

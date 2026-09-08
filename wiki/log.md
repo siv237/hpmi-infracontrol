@@ -690,3 +690,11 @@ Java↔M2 и проводной M2↔iRMC протоколы, JSON-эмуляц�
   `/api/overview?window=` теперь отдаёт `availability.{avgPct,buckets,perServer}`;
   `/api/ipmi/metrics` переведён на SQLite series/lastValues.
 - Дашборд «Обзор» получит живой график «Доступность» и аптайм из этих данных.
+
+## [2026-09-08] refactor | Разрез монолита web/index.html + тест-стек
+- Монолит `web/index.html` (125 КБ / 1863 строки: весь CSS, разметка и JS в одном файле) разбит на модули.
+- CSS → `web/css/*.css` (base, components, dashboard, servers, console, events, ui); дубль `.ov-table` (13px) вынесен в конец dashboard.css — перекрытие сохранено.
+- JS → `web/js/*.js` (15 модулей: core, events, tree, detail, ipmi, inventory, tabs, iso, users, tree-controls, console, layout, overview, auth, init) — классические скрипты в порядке зависимостей, общий global scope сохранён (логика не менялась, только перенос). Разметка HTML осталась в index.html без изменений.
+- `server/index.js`: новый роут `/css|js/*` — отдача статических модулей (mimeFor, no-store).
+- Тест-стек: `node:test` (unit/интеграция) + e2e-смок `puppeteer-core` (HTML/модулей/инициализации). `npm test` (unit), `npm run test:e2e` (требует `./start.sh`+CHROME, сам сервер не поднимает). Best practices — `knowledge/testing.md`.
+- Unit-тесты защищают разрез: нет inline монолита, модули на месте, синтаксис связки, набор функций без потерь/дублей имён, `$("id")` в HTML, роут сервера.

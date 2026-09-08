@@ -20,7 +20,9 @@
 | `server/irmc.js` | клиент протокола (сокет, рукопожатие, парсер, ввод) | `CConn`, `MessageReceiverThread`, `MessageSender`, `ServerHandshake` |
 | `server/store.js` | хранилище серверов, creds шифр. AES-256-GCM | `SettingsResMgr`/`ServerDialog` |
 | `server/index.js` | HTTP-сервер + `/api/test`, `/api/servers` + статика | `MahoganyViewer` (запуск) |
-| `web/index.html` | этап 1: форма + сохранение + список + отчёт | `ServerDialog` |
+| `web/index.html` | каркас: разметка всех страниц/модалок + подключение модулей | `ServerDialog` |
+| `web/css/*` | 7 CSS-модулей (base, components, dashboard, servers, console, events, ui) | — |
+| `web/js/*` | 15 JS-модулей (core, events, tree, detail, ipmi, inventory, tabs, iso, users, tree-controls, console, layout, overview, auth, init) | — |
 
 ## Хранилище и шифрование
 
