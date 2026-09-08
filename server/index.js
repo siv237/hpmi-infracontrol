@@ -7,13 +7,13 @@
 import http from 'node:http';
 import net from 'node:net';
 import { readFile } from 'node:fs/promises';
-import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { IrmcClient, testIrmc } from './irmc.js';
 import * as ipmi from './ipmi.js';
+import * as metrics from './metrics.js';
 import { listServers, saveServer, deleteServer, getServer, updateServer } from './store.js';
 import { listUsers, saveUser, updateUser, deleteUser, verifyPasswordByLogin, updatePassword, migrateLegacy } from './users-store.js';
 import { decrypt as decryptLegacyBox, getKey } from './crypto-box.js';
@@ -28,28 +28,10 @@ const PORT = Number(process.env.PORT || 1845);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
 
-// === История метрик/сенсоров (БД, p.5) — data/metrics.json (вне git) =======
-// Храним ряд точек по каждому сенсору каждого сервера (ring-буфер, cap).
-// Пишется интервальным IPMI-LAN опросом; не касается KVM/AVR, поэтому сессии
-// не убиваются.
-const METRICS_FILE = path.join(ROOT, 'data', 'metrics.json');
-const METRICS_CAP = 720; // ~12 часов при опросе раз в 60с на один сенсор
-let metrics = {};        // serverId -> { metric: [[ts, value], ...] }
-let metricsLoaded = false;
-function loadMetricsSync() {
-  try { metrics = JSON.parse(readFileSync(METRICS_FILE, 'utf8')); }
-  catch { metrics = {}; }
-  metricsLoaded = true;
-}
-function saveMetricsSync() {
-  try { writeFileSync(METRICS_FILE, JSON.stringify(metrics)); } catch {}
-}
-function pushMetric(serverId, name, ts, value) {
-  const s = (metrics[serverId] = metrics[serverId] || {});
-  const arr = (s[name] = s[name] || []);
-  arr.push([ts, value]);
-  if (arr.length > METRICS_CAP) s[name] = arr.slice(arr.length - METRICS_CAP);
-}
+// === История метрик/сенсоров (БД, п.5) — SQLite data/metrics.sqlite =======
+// Пишет интервальный IPMI-LAN опрос: сенсоры по имени + доступность
+// (ping 0/1, response_ms). Не касается KVM/AVR, поэтому сессии не убиваются.
+metrics.initMetrics();
 
 // Офлайн-хранилище (слой A, без мониторинга): снимки last-known, события,
 // история версий — только по факту подключения. data/storage.json (вне git).
@@ -435,7 +417,19 @@ const server = http.createServer(async (req, res) => {
       off: servers.filter((s2) => s2.status === 'off').length,
       none: servers.filter((s2) => s2.status === 'none').length,
     };
-    return json(res, 200, { ok: true, summary, servers });
+    // Доступность за окно (п.5): из SQLite — питает график/сводку дашборда
+    const windowSec = Math.min(Number(url.searchParams.get('window')) || 86400, 30 * 86400);
+    const avSum = metrics.availabilitySummary(windowSec);
+    const pcts = servers.map((s2) => (avSum[s2.id] && avSum[s2.id].pct !== null ? avSum[s2.id].pct : null)).filter((p) => p !== null);
+    const avgPct = pcts.length ? Math.round(pcts.reduce((a, b) => a + b, 0) / pcts.length * 10) / 10 : null;
+    return json(res, 200, {
+      ok: true, summary, servers,
+      availability: {
+        avgPct,
+        buckets: metrics.availabilityBuckets(windowSec),
+        perServer: avSum,
+      },
+    });
   }
 
   // === Хранилище ISO (п.10.2): загрузка/список/удаление/переименование/раздача
@@ -536,20 +530,38 @@ const server = http.createServer(async (req, res) => {
     for (const [id, s] of sensorCache) out[id] = s;
     return json(res, 200, { ok: true, sensors: out });
   }
-  // История сенсоров (БД) по серверу: серия [ts, value] на каждый сенсор
-  if (url.pathname === '/api/ipmi/metrics' && req.method === 'GET') {
-    if (!metricsLoaded) loadMetricsSync();
+  // SEL-события (журнал IPMI) по серверу из кеша опроса
+  if (url.pathname === '/api/ipmi/sel' && req.method === 'GET') {
     const serverId = new URL(req.url, 'http://x').searchParams.get('serverId');
-    const list = metrics[serverId] ? { [serverId]: metrics[serverId] } : {};
-    // lastValues — последние точки по каждому сенсору
-    const lastValues = {};
-    for (const [id, s] of Object.entries(list)) {
-      lastValues[id] = {};
-      for (const [metric, arr] of Object.entries(s)) {
-        if (arr && arr.length) lastValues[id][metric] = arr[arr.length - 1];
-      }
+    if (serverId) {
+      const c = sensorCache.get(serverId);
+      if (c) return json(res, 200, { ok: true, events: c.events || [], ts: c.ts });
+      return json(res, 404, { ok: false, error: 'нет данных опроса' });
     }
-    return json(res, 200, { ok: true, series: list, lastValues });
+    const out = {};
+    for (const [id, s] of sensorCache) out[id] = s.events || [];
+    return json(res, 200, { ok: true, sel: out });
+  }
+  // Питание/здоровье (chassis) из кеша
+  if (url.pathname === '/api/ipmi/chassis' && req.method === 'GET') {
+    const serverId = new URL(req.url, 'http://x').searchParams.get('serverId');
+    if (serverId) {
+      const c = sensorCache.get(serverId);
+      if (c) return json(res, 200, { ok: true, power: c.power, faults: c.faults, ts: c.ts });
+      return json(res, 404, { ok: false, error: 'нет данных опроса' });
+    }
+    const out = {};
+    for (const [id, s] of sensorCache) { if (s) out[id] = { power: s.power, faults: s.faults }; }
+    return json(res, 200, { ok: true, chassis: out });
+  }
+  if (url.pathname === '/api/ipmi/metrics' && req.method === 'GET') {
+    const serverId = new URL(req.url, 'http://x').searchParams.get('serverId');
+    const windowSec = Math.min(Number(new URL(req.url, 'http://x').searchParams.get('window')) || 86400, 30 * 86400);
+    if (serverId) return json(res, 200, { ok: true, series: metrics.series(serverId, 'temp', windowSec), lastValues: metrics.lastValues()[serverId] || {} });
+    const allSeries = {};
+    const allLast = metrics.lastValues();
+    for (const id of Object.keys(allLast)) allSeries[id] = metrics.series(id, 'temp', windowSec);
+    return json(res, 200, { ok: true, series: allSeries, lastValues: allLast });
   }
   // Примонтировать (admin): {serverId, isoId}
   if (url.pathname === '/api/mounts' && req.method === 'PUT') {
@@ -852,26 +864,41 @@ async function pollSensors() {
   if (sensorBusy) return;
   sensorBusy = true;
   try {
-    if (!metricsLoaded) loadMetricsSync();
     const list = await listServers(false);
     await Promise.all(list.filter((s) => s.host).map(async (s) => {
+      const t0 = Date.now();
       try {
         const cfg = await getServer(s.id);
         if (!cfg || !cfg.username) return;
-        const r = await ipmi.readSensors(cfg);
+        const r = await ipmi.readAll(cfg);
         const ts = Date.now();
-        sensorCache.set(s.id, { ts, temps: r.temps, fans: r.fans, error: null });
-        for (const t of r.temps) pushMetric(s.id, 'temp:' + t.name, ts, t.value);
-        for (const f of r.fans) pushMetric(s.id, 'fan:' + f.name, ts, f.value);
-        saveMetricsSync();
+        const ms = ts - t0;
+        // Доступность опроса (питает график/сводку дашборда, п.1/5)
+        metrics.writeAvailability(s.id, true, ms, ts);
+        sensorCache.set(s.id, {
+          ts, temps: r.temps, fans: r.fans, events: r.events,
+          power: r.power, faults: r.faults, fru: r.fru, error: null,
+        });
+        for (const t of r.temps) metrics.writeMetric(s.id, 'temp:' + t.name, t.value, ts);
+        for (const f of r.fans) metrics.writeMetric(s.id, 'fan:' + f.name, f.value, ts);
+        // Новые SEL-события (критические) — в доменный журнал с меткой ipmi-
+        for (const ev of r.events || []) {
+          if (ev.level === 'critical') {
+            metrics.addEvent(s.id, 'warn', `IPMI [${ev.sensor}] ${ev.detail || ev.category}`, ts);
+          }
+        }
       } catch (e) {
-        sensorCache.set(s.id, { ts: Date.now(), temps: [], fans: [], error: String((e && e.message) || e) });
+        const ms = Date.now() - t0;
+        metrics.writeAvailability(s.id, false, ms, Date.now());
+        sensorCache.set(s.id, { ts: Date.now(), temps: [], fans: [], events: [], power: null, faults: {}, fru: {}, error: String((e && e.message) || e) });
       }
     }));
   } finally { sensorBusy = false; }
 }
 setInterval(pollSensors, 60000);
 pollSensors();
+// Ретеншн истории (п.5.5): чистка > 30 дней каждые 6 часов
+setInterval(() => { try { metrics.prune(30); } catch {} }, 6 * 3600 * 1000);
 
 
 // Graceful shutdown (слой A): при остановке закрываем все консольные

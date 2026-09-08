@@ -669,3 +669,24 @@ Java↔M2 и проводной M2↔iRMC протоколы, JSON-эмуляц�
 - Сессии KVM не трогаются (только UDP IPMI) — блок заморозки устранён.
 - Смысл деталь: git-истории полной версии «Обзор» НЕТ (везде placeholder),
   собран заново поверх инвентаря+IPMI-poll+events.
+
+## [2026-09-08] project | Расширение IPMI-сбора + возврат SQLite (п.5)
+- `server/ipmi.js` расширен: кроме SDR (temp/fan) читает **SEL** (`sel elist` —
+  журнал событий), **chassis status/power** (питание + флаги fault), **FRU**
+  (`fru print` — инвентарь). `readAll()` собирает всё параллельно, KVM не трогает.
+- Парсеры: `parseSEL` (категории temp/fan/power/voltage/cpu/memory/watchdog/
+  critical + уровень critical/warning/info), `parseChassis` (ключ : значение),
+  `readFru` (`key : value`).
+- **БД истории возвращена на SQLite** (исходный замысел п.5):
+  `server/metrics.js` (better-sqlite3, data/metrics.sqlite, WAL), таблицы
+  `metrics(server_id,metric,ts,value)` + `events(ts,server_id,kind,text)`,
+  метрика доступности `ping` 0/1 + `response_ms`, чтение series/lastValues/
+  availabilitySummary/availabilityBuckets, ретеншн 30 дней (чистка каждые 6ч).
+  JSON-ring заменён. `package.json` +better-sqlite3.
+- Опрос пишет: доступность (ping+response_ms) каждый тик + сенсоры по имени
+  (`temp:*`,`fan:*`); критические SEL-события → `metrics.addEvent` (п.5), не в
+  storage.json (не дублируют AVR-события).
+- API: `/api/ipmi/sel[?serverId=]`, `/api/ipmi/chassis[?serverId=]`;
+  `/api/overview?window=` теперь отдаёт `availability.{avgPct,buckets,perServer}`;
+  `/api/ipmi/metrics` переведён на SQLite series/lastValues.
+- Дашборд «Обзор» получит живой график «Доступность» и аптайм из этих данных.

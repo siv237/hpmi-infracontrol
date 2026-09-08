@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@novnc/novnc": "^1.7.0",
+    "better-sqlite3": "^11.10.0",
     "puppeteer-core": "^24.43.1",
     "ws": "^8.18.0"
   },
