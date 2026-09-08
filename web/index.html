@@ -108,6 +108,12 @@ table.si.utable td .ucell .sub{font-size:11.5px;color:var(--faint)}
 .mount-ctrl{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .mount-ctrl .sel{width:min(320px,52vw)}
 .iso-meta{font-size:12px;color:var(--muted);margin-top:4px}
+.mount-metrics{display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:12.5px;color:var(--muted);min-width:0}
+.mount-metrics .mm{display:flex;align-items:center;gap:5px;white-space:nowrap}
+.mount-metrics .mm b{color:var(--text);font-variant-numeric:tabular-nums}
+.mount-metrics .mm-dot{width:7px;height:7px;border-radius:50%;background:#c8cdd6;flex:none}
+.mount-metrics .mm-dot.live{background:#2ea56d;box-shadow:0 0 0 0 rgba(46,165,109,.5);animation:livePulse 1.6s infinite}
+@keyframes livePulse{0%{box-shadow:0 0 0 0 rgba(46,165,109,.45)}70%{box-shadow:0 0 0 6px rgba(46,165,109,0)}100%{box-shadow:0 0 0 0 rgba(46,165,109,0)}}
 
 .split{display:grid;grid-template-columns:340px 1fr;gap:20px;align-items:start}
 .tree-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 10px 18px}
@@ -475,6 +481,11 @@ table.si td.v{font-weight:500;color:#333c49;white-space:pre-wrap;word-break:brea
                     <div>
                       <div class="mount-title">Монтирование ISO</div>
                       <div class="mount-sub" id="storageState">Не примонтировано</div>
+                    </div>
+                    <div class="mount-metrics" id="storageMetrics" style="display:none">
+                      <span class="mm"><span class="mm-dot live"></span>активно <b id="storageUp">0с</b></span>
+                      <span class="mm">скорость <b id="storageSpd">0 МБ/с</b></span>
+                      <span class="mm">передано <b id="storageBytes">0 МБ</b></span>
                     </div>
                   </div>
                   <div class="mount-ctrl" id="storageCtrl">
@@ -1015,6 +1026,33 @@ async function openMountPicker(id){
 }
 
 // === Хранилище: состояние монтирования + управление (вкладка сервера) ===
+let storageTick=null;
+function fmtDur(ms){
+  const s=Math.max(0,Math.floor(ms/1000));
+  const h=Math.floor(s/3600), m=Math.floor((s%3600)/60), sec=s%60;
+  return (h?h+'ч ':'')+(m?m+'м ':'')+sec+'с';
+}
+function fmtB(n){ return (n/1048576).toFixed(1)+' МБ'; }
+function startStorageMetrics(m){
+  const ts=m && m.ts ? new Date(m.ts).getTime() : Date.now();
+  const up=$('storageUp'), spd=$('storageSpd'), bytes=$('storageBytes');
+  $('storageMetrics').style.display='flex';
+  const tick=()=>{ up.textContent=fmtDur(Date.now()-ts); };
+  tick();
+  if(storageTick){ clearInterval(storageTick); storageTick=null; }
+  const poll=async()=>{ try{ const j=await api('/api/mounts/stats'); if(j.ok&&j.stats){
+    spd.textContent=(j.stats.bps/1048576).toFixed(2)+' МБ/с';
+    bytes.textContent=fmtB(j.stats.bytes||0);
+  } }catch{} };
+  poll();
+  storageTick=setInterval(()=>{ tick(); },1000);
+  const pollT=setInterval(()=>poll(),2000);
+  storageTick._poll=pollT; // bound, чтобы останавливать вместе
+}
+function stopStorageMetrics(){
+  if(storageTick){ clearInterval(storageTick); clearInterval(storageTick._poll); storageTick=null; }
+  $('storageMetrics').style.display='none';
+}
 async function renderStorage(){
   const id=sel; if(!id)return;
   if(!isoImages.length){ const j=await api('/api/iso'); if(j.ok) isoImages=j.images||[]; }
@@ -1027,11 +1065,13 @@ async function renderStorage(){
     const who=m.by?(' · '+esc(m.by)):'';
     const when=m.ts?(new Date(m.ts).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})):'—';
     st.innerHTML='Примонтирован: <b>'+esc(m.isoName)+'</b><div class="iso-meta">время: '+when+who+'</div>';
+    startStorageMetrics(m);
   }else{
     ico.classList.remove('mounted');
     $('storageMountBtn').style.display='';
     $('storageUnmountBtn').style.display='none';
     st.innerHTML='Не примонтировано<div class="iso-meta" id="storageSelTip"></div>';
+    stopStorageMetrics();
   }
   const selBox=$('storageIsoSel');
   const cur=selBox.value;

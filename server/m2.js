@@ -20,6 +20,11 @@ let child = null;
 let m2Port = null;
 let starting = null;
 let activeSock = null; // сокет share-сессии (живёт, пока смонтировано)
+// Учёт переданных байт: процесс M2 читает ISO (pread/read) в том же процессе, что
+// dlopen'ит .so. Семплируем /proc/<pid>/io rchar — реальный объём, отданный iRMC.
+let meter = { startedMs: 0, bytes: 0, bps: 0 };
+let statTimer = null;
+let prevRchar = new Map(); // pid -> последний rchar
 
 function extractFromJar() {
   return new Promise((resolve, reject) => {
@@ -136,6 +141,8 @@ export async function share({ host, port = 80, sharePath, shareType = DT_CD_ISO_
     sock.once('connect', resolve);
     sock.once('error', reject);
   });
+  // начинаем учёт переданных байт (реальный путь M2 читает ISO -> iRMC)
+  startStats();
   // В легаси share идёт по сокету, где уже был discovery (MountDialog).
   const disc = Buffer.alloc(544);
   disc.writeUInt16LE(5901, 0); // portNumber = StoragePort
@@ -160,9 +167,53 @@ export async function share({ host, port = 80, sharePath, shareType = DT_CD_ISO_
 
 // Отмонтировать: рвём share-сокет (M2 завершает URS-сессию).
 export function unshare() {
+  stopStats();
   if (activeSock) { try { activeSock.destroy(); } catch { } activeSock = null; }
+}
+
+function ioRchar(pid) {
+  if (!pid) return NaN;
+  try {
+    const s = fs.readFileSync(`/proc/${pid}/io`, 'utf8');
+    const m = s.match(/^rchar:\s+(\d+)/m);
+    return m ? Number(m[1]) : NaN;
+  } catch { return NaN; }
+}
+
+function startStats() {
+  stopStats();
+  const pid = child && child.pid;
+  if (!pid) return;
+  meter.startedMs = Date.now();
+  meter.bytes = 0; meter.bps = 0;
+  prevRchar.set(pid, ioRchar(pid));
+  statTimer = setInterval(() => {
+    const cur = ioRchar(pid);
+    const last = prevRchar.get(pid);
+    if (!Number.isNaN(cur) && !Number.isNaN(last) && cur >= last) {
+      const delta = cur - last;
+      meter.bytes += delta;
+      meter.bps = delta;                       // байт/сек за текущий такт
+    }
+    prevRchar.set(pid, cur);
+  }, 1000);
+  statTimer.unref?.();
+}
+
+function stopStats() {
+  if (statTimer) { clearInterval(statTimer); statTimer = null; }
+  meter.bps = 0;
 }
 
 export function status() {
   return { running: !!m2Port, port: m2Port };
+}
+
+export function stats() {
+  return {
+    active: !!activeSock,
+    startedMs: meter.startedMs || 0,
+    bytes: meter.bytes || 0,
+    bps: meter.bps || 0,
+  };
 }

@@ -489,6 +489,10 @@ const server = http.createServer(async (req, res) => {
     }));
     return json(res, 200, { ok: true, mounts: out });
   }
+  // Живые метрики активного монтирования (активность/скорость передачи)
+  if (url.pathname === '/api/mounts/stats' && req.method === 'GET') {
+    return json(res, 200, { ok: true, stats: m2.stats() });
+  }
   // Примонтировать (admin): {serverId, isoId}
   if (url.pathname === '/api/mounts' && req.method === 'PUT') {
     if (req.user.role !== 'admin') return json(res, 403, { ok: false, error: 'права администратора' });
