@@ -22,6 +22,9 @@ LLM Wiki проекта iRMC Viewer (этап 1). Страницы в `wiki/`, �
 - [knowledge/irmc-storage.md](knowledge/irmc-storage.md) — проброс ISO:
   нативный движок M2 (локальный протокол Java↔M2, последовательность
   M2↔iRMC, формат URSStorage), почему 153 без M2 не доставляет данные.
+- [knowledge/irmc-research-conclusion.md](knowledge/irmc-research-conclusion.md) —
+  заключение по исследованию монтирования ISO: архитектура (M2-движок),
+  локальный и проводной протоколы, эмуляция на сервере, контроль целостности.
 
 ## Хронология
 
