@@ -18,8 +18,13 @@ async function enterApp(user){
   // восстановить последнюю открытую вкладку (F5 не сбрасывает на «Серверы»)
   let restorePage='servers';
   try{ const p=localStorage.getItem('ui.page'); if(p&&IMPLEMENTED.has(p))restorePage=p; }catch{}
+  const savedSel=localStorage.getItem('ui.sel')||null;
+  await load();
   showPage(restorePage);
-  load(); loadUsers();
+  await loadUsers();
+  if(restorePage==='servers'&&savedSel&&servers.some(s=>s.id===savedSel)){
+    restoreDetail(savedSel);
+  }
 }
 $('l_enter').onclick=async()=>{
   const login=$('l_login').value.trim(), password=$('l_password').value;

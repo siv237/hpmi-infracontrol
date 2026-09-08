@@ -1,6 +1,7 @@
 // ---- выбор сервера -------------------------------------------------------
 function select(id){
   sel=id; renderTree();
+  try{ localStorage.setItem('ui.sel',id); }catch{}
   showDetail();
   loadInv(id);
   loadSensors(id);

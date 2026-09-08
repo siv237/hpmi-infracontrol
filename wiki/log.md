@@ -698,3 +698,25 @@ Java↔M2 и проводной M2↔iRMC протоколы, JSON-эмуляц�
 - `server/index.js`: новый роут `/css|js/*` — отдача статических модулей (mimeFor, no-store).
 - Тест-стек: `node:test` (unit/интеграция) + e2e-смок `puppeteer-core` (HTML/модулей/инициализации). `npm test` (unit), `npm run test:e2e` (требует `./start.sh`+CHROME, сам сервер не поднимает). Best practices — `knowledge/testing.md`.
 - Unit-тесты защищают разрез: нет inline монолита, модули на месте, синтаксис связки, набор функций без потерь/дублей имён, `$("id")` в HTML, роут сервера.
+
+## [2026-09-08] project | Вкладка «Журналы» (IPMI SEL) + фикс F5 (BUG-001)
+- Журналы — по макету InfraControl («Уведомления»): двухколоночная страница
+  (фильтры+таблица слева, детали справа). Данные — **SEL по IPMI API**:
+  `GET /api/ipmi/sel` (кеш опроса 60с, см. knowledge/irmc-ipmi.md), поля
+  `{id, ts, sensor, detail, category, level}`; имена серверов/групп — из
+  `/api/servers` (маппинг по serverId).
+- Левый столбец: счётчики-чипы (Все/Критические/Предупреждения/Информационные,
+  по level), фильтры (период, категория, сервер, Сбросить), таблица
+  Время/Событие/Сервер/Статус, пагинация (10/20/50) в стиле overview.
+- Правый столбец: шапка события (+иконка/цвет по level), Основная информация,
+  События (последние) по серверу, Комментарии (in-memory на сессию — в БД
+  поля нет).
+- Новые файлы: `web/css/logs.css`, `web/js/logs.js` (16-й JS-модуль);
+  разметка `#page-logs` в index.html; `layout.js` IMPLEMENTED+=logs +
+  `showPage('logs')→loadLogs()`; тест-стек `test/web-split.test.js` обновлён
+  (css/js списки + функции logTs/logSevChip/loadLogs/…/initLogsUI, restoreDetail).
+- **BUG-001 закрыт**: `overview`/`logs` в IMPLEMENTED; `select()` пишет `ui.sel`;
+  `switchTab()` пишет `ui.tab`; `enterApp` → `await load()` →
+  `showPage(restorePage)` → `restoreDetail(savedSel)` восстанавливает сервер+вкладку
+  карточки. BUGS.md->закрыт.
+- `npm test` (node:test, 24 теста) — 0 fail.

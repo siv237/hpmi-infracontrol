@@ -7,8 +7,8 @@ import { join } from 'node:path';
 const ROOT = '/home/siv/proj/IPMI-Viewer';
 const web = join(ROOT, 'web');
 
-const CSS_FILES = ['base.css','components.css','dashboard.css','servers.css','console.css','events.css','ui.css'];
-const JS_FILES = ['core.js','events.js','tree.js','detail.js','ipmi.js','inventory.js','tabs.js','iso.js','users.js','tree-controls.js','console.js','layout.js','overview.js','auth.js','init.js'];
+const CSS_FILES = ['base.css','components.css','dashboard.css','servers.css','console.css','events.css','logs.css','ui.css'];
+const JS_FILES = ['core.js','events.js','tree.js','detail.js','ipmi.js','inventory.js','tabs.js','iso.js','users.js','tree-controls.js','console.js','layout.js','overview.js','logs.js','auth.js','init.js'];
 
 const idx = readFileSync(join(web, 'index.html'), 'utf8');
 const html = idx.slice(idx.indexOf('<body>'), idx.indexOf('</body>') + '</body>'.length);
@@ -56,7 +56,7 @@ const EXPECTED_FUNCTIONS = [
   // events
   'addEvent','renderEvents',
   // tree
-  'load','treeFilter','branchKey','loadUiConfig','loadExpanded','saveExpanded','renderTree','delServer',
+  'load','treeFilter','branchKey','loadUiConfig','loadExpanded','saveExpanded','renderTree','delServer','restoreDetail',
   // detail
   'select','hideDetail','showDetail','renderDetail','trustKeys','valFrom','renderSI','renderHWTable',
   // ipmi
@@ -77,6 +77,8 @@ const EXPECTED_FUNCTIONS = [
   'setFold','showPage',
   // overview
   'stChip','drawAvailabilityChart','loadOverview','renderOverviewRows','buildGroupFilter','startOverview',
+  // logs
+  'logTs','logSevChip','loadLogs','filteredLogs','renderLogs','buildLogServerFilter','selectLog','initLogsUI',
   // auth
   'showLogin','hideLogin','enterApp',
 ];

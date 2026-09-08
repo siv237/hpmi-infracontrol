@@ -71,6 +71,18 @@ function renderTree(){
     n.onclick=()=>select(n.getAttribute('data-id'));
   });
 }
+// Восстановить выбор сервера и вкладку после F5 (BUG-001): select() сам
+// поднимает данные/консоль, затем применяем сохранённую вкладку детали.
+function restoreDetail(id){
+  select(id);
+  saveExpanded();
+  const t=localStorage.getItem('ui.tab')||'overview';
+  const valid=['overview','hardware','health','network','storage','events','console','files','settings'];
+  if(valid.includes(t)&&t!=='overview'){
+    const tEl=document.querySelector('#tabs .tab[data-tab="'+t+'"]');
+    if(tEl){ switchTab(t); }
+  }
+}
 async function delServer(id){
   if(!isAdmin()){snack('Только администратор может удалять серверы');return;}
   const s=servers.find(x=>x.id===id);

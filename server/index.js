@@ -874,6 +874,7 @@ server.listen(PORT, () => {
 // RMCP+/UDP (623/664), отдельный канал — НЕ трогает AVR/TCP-консоль, поэтому
 // не блокирует и не ломает KVM-сессии вьювера (прежняя причина заморозки).
 const sensorCache = new Map();   // serverId -> {ts, temps, fans, error}
+const selSeen = new Set();       // дедуп критических SEL при записи в БД (см. pollSensors)
 let sensorBusy = false;
 async function pollSensors() {
   if (sensorBusy) return;
@@ -896,9 +897,15 @@ async function pollSensors() {
         });
         for (const t of r.temps) metrics.writeMetric(s.id, 'temp:' + t.name, t.value, ts);
         for (const f of r.fans) metrics.writeMetric(s.id, 'fan:' + f.name, f.value, ts);
-        // Новые SEL-события (критические) — в доменный журнал с меткой ipmi-
+        // Новые SEL-события (критические) — в доменный журнал с меткой ipmi-.
+        // Хост пишет в SEL сотни одинаковых записей, и каждые 60с опрос вернул
+        // бы их заново — дедупликация по (sensor+detail+ts) до записи в БД.
         for (const ev of r.events || []) {
           if (ev.level === 'critical') {
+            const dupKey = s.id + '|' + (ev.ts || '') + '|' + (ev.sensor || '') + '|' + (ev.detail || '');
+            if (selSeen.has(dupKey)) continue;
+            if (selSeen.size > 2000) { const f = selSeen.keys().next().value; if (f) selSeen.delete(f); }
+            selSeen.add(dupKey);
             metrics.addEvent(s.id, 'warn', `IPMI [${ev.sensor}] ${ev.detail || ev.category}`, ts);
           }
         }

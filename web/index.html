@@ -10,8 +10,9 @@
 <link rel="stylesheet" href="/css/dashboard.css">
 <link rel="stylesheet" href="/css/servers.css">
 <link rel="stylesheet" href="/css/console.css">
-<link rel="stylesheet" href="/css/events.css">
-<link rel="stylesheet" href="/css/ui.css">
+    <link rel="stylesheet" href="/css/events.css">
+    <link rel="stylesheet" href="/css/logs.css">
+    <link rel="stylesheet" href="/css/ui.css">
 </head>
 <body>
 <!-- АВТОРИЗАЦИЯ -->
@@ -366,6 +367,105 @@
           <table class="si utable" id="userTable"></table>
         </section>
       </div>
+      <!-- СТРАНИЦА: ЖУРНАЛЫ (IPMI SEL — события, предупреждения, системные сообщения) -->
+      <div class="page" id="page-logs" style="display:none">
+        <div class="logs-layout">
+          <!-- ЛЕВАЯ КОЛОНКА: фильтры + список -->
+          <section class="detail logs-card">
+            <div class="logs-head">
+              <div class="ttl">
+                <span class="logs-ttl">Журналы</span>
+                <span class="count-pill" id="logsCount">0</span>
+              </div>
+              <div class="tools">
+                <button class="icon-btn" title="Обновить" id="logsRefreshBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button>
+              </div>
+            </div>
+            <div class="logs-sub">События, предупреждения и системные сообщения iRMC (IPMI SEL)</div>
+
+            <div class="logs-chips" id="logsChips">
+              <span class="lp-chip active" data-sev="">Все <b id="logsC_all">0</b></span>
+              <span class="lp-chip cr" data-sev="critical">Критические <b id="logsC_critical">0</b></span>
+              <span class="lp-chip wa" data-sev="warning">Предупреждения <b id="logsC_warning">0</b></span>
+              <span class="lp-chip in" data-sev="info">Информационные <b id="logsC_info">0</b></span>
+            </div>
+
+            <div class="logs-filters">
+              <select class="sel" id="logsDate" title="Период">
+                <option value="">За всё время</option>
+                <option value="1">Сегодня</option>
+                <option value="7">7 дней</option>
+                <option value="30">30 дней</option>
+              </select>
+              <select class="sel" id="logsCat" title="Категория">
+                <option value="">Все категории</option>
+                <option value="temp">Температура</option>
+                <option value="fan">Вентиляция</option>
+                <option value="power">Питание</option>
+                <option value="voltage">Напряжение</option>
+                <option value="cpu">Процессор</option>
+                <option value="memory">Память</option>
+                <option value="watchdog">Watchdog</option>
+                <option value="critical">Критические</option>
+                <option value="other">Прочие</option>
+              </select>
+              <select class="sel" id="logsServer" title="Сервер">
+                <option value="">Все серверы</option>
+              </select>
+              <button class="tool-btn" id="logsResetBtn">Сбросить</button>
+            </div>
+
+            <table class="ov-table">
+              <thead><tr><th>Время</th><th>Событие</th><th>Сервер</th><th>Статус</th></tr></thead>
+              <tbody id="logsRows"><tr><td colspan="4" class="ov-empty">Загрузка…</td></tr></tbody>
+            </table>
+            <div class="ov-pager">
+              <span id="logsRange">—</span>
+              <span class="ov-pages" id="logsPages"></span>
+              <select class="sel ov-sel-sm" id="logsPerPage" title="На странице">
+                <option value="10">10 на странице</option>
+                <option value="20">20 на странице</option>
+                <option value="50">50 на странице</option>
+              </select>
+            </div>
+          </section>
+
+          <!-- ПРАВАЯ КОЛОНКА: детали события -->
+          <section class="detail logs-detail">
+            <div id="logsEmpty" style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:70px 20px;color:var(--faint)">
+              <svg style="width:46px;height:46px;margin-bottom:14px;color:#c3cad6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16M6 15l6-6 4 4 4-4"/></svg>
+              <div style="font-size:15px;font-weight:600;color:var(--muted)">Выберите запись журнала</div>
+            </div>
+            <div id="logsDetail" style="display:none">
+              <div class="logs-det-head">
+                <span class="logs-lvl" id="ldIco"></span>
+                <div class="ld-titlebox">
+                  <div class="ld-title" id="ldTitle">—</div>
+                  <div class="ld-sub" id="ldSub">—</div>
+                </div>
+                <span class="logs-when" id="ldWhen"></span>
+              </div>
+              <div class="logs-desc" id="ldDesc"></div>
+              <div class="panel">
+                <div class="ph">Основная информация</div>
+                <table class="si" id="ldTable"></table>
+              </div>
+              <div class="panel" id="ldRecentPanel">
+                <div class="ph">События (последние)</div>
+                <div class="ev-list" id="ldRecent"></div>
+              </div>
+              <div class="panel">
+                <div class="ph">Комментарии</div>
+                <div class="logs-comment">
+                  <textarea id="ldComment" rows="3" placeholder="Добавить комментарий…"></textarea>
+                  <button class="tool-btn primary" id="ldCommentBtn">Сохранить</button>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+
       <!-- СТРАНИЦА: ПРОФИЛЬ -->
       <div class="page" id="page-profile" style="display:none">
         <div class="page-head"><h1>Профиль</h1></div>
@@ -458,8 +558,9 @@
 <script src="/js/tree-controls.js"></script>
 <script src="/js/console.js"></script>
 <script src="/js/layout.js"></script>
-<script src="/js/overview.js"></script>
-<script src="/js/auth.js"></script>
+    <script src="/js/overview.js"></script>
+    <script src="/js/logs.js"></script>
+    <script src="/js/auth.js"></script>
 <script src="/js/init.js"></script>
 </body>
 </html>

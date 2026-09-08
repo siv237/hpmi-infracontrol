@@ -2,6 +2,7 @@
 function switchTab(name){
   const t=document.querySelector('#tabs .tab[data-tab="'+name+'"]'); if(!t)return;
   tab=name;
+  try{ localStorage.setItem('ui.tab',name); }catch{}
   document.querySelectorAll('#tabs .tab').forEach(x=>x.classList.toggle('active',x===t));
   document.querySelectorAll('.tabpane').forEach(x=>x.style.display='none');
   $('pane-'+tab).style.display='block';
