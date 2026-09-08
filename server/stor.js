@@ -70,10 +70,12 @@ export class StorClient {
     this.host=host; this.port=port; this.sharePath=sharePath; this.file=file;
     this.log=log; this.sock=null; this.buf=Buffer.alloc(0); this.idx=1;
     this.fileHandle=null; this.meta=null; this.pathSent=false;
+    this.lastRx=Date.now(); this.aliveTimer=null;
   }
 
   async open(second=false) {
     if (!this.fileHandle && !second) this.fileHandle=await fs.promises.open(this.file,'r');
+    if (!second) this._startKeepAlive();
     return new Promise((res,rej)=>{
       const s=net.connect(this.port,this.host);
       (second? this.meta=this.meta??{}: this.sock=s);
@@ -83,6 +85,20 @@ export class StorClient {
       s.on('data',(d)=>this._onData(d, second));
       s.setTimeout(25000,()=>{try{s.end();}catch{}});
     });
+  }
+
+  // Keep-alive: если от iRMC тихо >25с — шлём подтверждение активности (f2)
+  // на метаканале, чтобы вирт. USB не ушёл в offline по таймауту прошивки.
+  _startKeepAlive(){
+    if(this.aliveTimer) return;
+    this.aliveTimer=setInterval(()=>{
+      const idle=Date.now()-this.lastRx;
+      if(idle>25000){
+        this._log('idle '+Math.round(idle/1000)+'s — keep-alive (f2 на метаканале)');
+        if(this.meta&&this.meta.sock&&!this.meta.sock.destroyed) this.sendClientConfirm();
+      }
+    },20000);
+    this.aliveTimer.unref?.();
   }
 
   _log(m){ try{this.log('[stor] '+m);}catch{} }
@@ -117,6 +133,7 @@ export class StorClient {
       return;
     }
     this._log('RX '+d.length+'B '+d.subarray(0,48).toString('hex'));
+    this.lastRx=Date.now();
     this.buf=Buffer.concat([this.buf,d]);
     if(this._banner && this.buf.includes(Buffer.from('Fujitsu'))){const c=this._banner;this._banner=null;c();}
     this._parse();
@@ -158,12 +175,21 @@ export class StorClient {
       await this.fileHandle.read(buf,0,len,lba*2048);
       send(Buffer.concat([read10Frame(idx), buf]));
       this._log(`-> READ10 LBA=${lba} x${xfer} -> ${len}B (frame idx=${idx})`);
-    } else if(op===0x1b){ // START/STOP (0x1b) и прочее — пустое ок
+    } else if(op===0x1b){ // START/STOP (0x1b) — пустое ок
       send(envelope(0x08,idx));
       this._log('-> op 0x1b (0x08)');
-    } else if(op===0x03||op===0x00){ // REQ SENSE / TUR
+    } else if(op===0x03){ // REQUEST SENSE: мгновенно "no sense / ok" (18Б)
+      const s=Buffer.alloc(18);
+      s[0]=0x70; s[7]=0x0a;                  // Fixed format, sense key 0 (no sense)
+      send(Buffer.concat([envelope(18, idx), s]));
+      this._log('-> REQUEST SENSE ok (keep-alive ack)');
+    } else if(op===0x00){ // TEST UNIT READY
       send(envelope(0x08,idx));
-      this._log('-> sense 0x08');
+      this._log('-> TUR ok (keep-alive ack)');
+    } else if(op===0x4a){ // GET EVENT STATUS NOTIFICATION: минимальный
+      // profile DVD (0x10) / CD (0x00 низкий байт), события нет
+      send(Buffer.concat([envelope(0x0c, idx), Buffer.from([0x00,0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00])]));
+      this._log('-> GET EVENT ok (keep-alive ack)');
     } else if(op===0x2a){ // WRITE10 — не поддерживаем, ok
       send(envelope(0x08,idx));
     } else {
@@ -173,5 +199,6 @@ export class StorClient {
     }
   }
 
-  close(){ try{this.sock?.end();}catch{} try{this.meta?.sock?.end();}catch{} try{this.fileHandle?.close();}catch{} }
+  close(){ try{this.sock?.end();}catch{} try{this.meta?.sock?.end();}catch{} try{this.fileHandle?.close();}catch{}
+    if(this.aliveTimer){ clearInterval(this.aliveTimer); this.aliveTimer=null; } }
 }

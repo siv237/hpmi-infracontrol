@@ -493,6 +493,12 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/mounts/stats' && req.method === 'GET') {
     return json(res, 200, { ok: true, stats: m2.stats() });
   }
+  // Восстановить сессию монтирования (admin): повторный share по прошлому конфигу
+  if (url.pathname === '/api/mounts/recover' && req.method === 'POST') {
+    if (req.user.role !== 'admin') return json(res, 403, { ok: false, error: 'права администратора' });
+    const r = await m2.recover();
+    return json(res, r.ok ? 200 : 409, r);
+  }
   // Примонтировать (admin): {serverId, isoId}
   if (url.pathname === '/api/mounts' && req.method === 'PUT') {
     if (req.user.role !== 'admin') return json(res, 403, { ok: false, error: 'права администратора' });

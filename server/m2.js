@@ -25,6 +25,8 @@ let activeSock = null; // сокет share-сессии (живёт, пока с
 let meter = { startedMs: 0, bytes: 0, bps: 0 };
 let statTimer = null;
 let prevRchar = new Map(); // pid -> последний rchar
+let lastShareCfg = null;   // последний успешный share (для авто-восстановления)
+let wdTimer = null;        // watchdog восстановления сессии
 
 function extractFromJar() {
   return new Promise((resolve, reject) => {
@@ -129,46 +131,79 @@ function readN(sock, n, ms = 8000) {
 // host — адрес iRMC, port — HTTP-порт iRMC (как в легаси: m_storagePort = m_HttpPort).
 export async function share({ host, port = 80, sharePath, shareType = DT_CD_ISO_IMAGE }) {
   await ensureM2();
-  let ip = host;
+  if (activeSock) { try { activeSock.destroy(); } catch { } activeSock = null; }
+  const cfg = { host, port, sharePath, shareType };
+  try {
+    const r = await shareRaw(cfg);
+    lastShareCfg = cfg;
+    startWatchdog();
+    return r;
+  } catch (e) { lastShareCfg = null; throw e; }
+}
+
+// Надёжность: если процесс M2 умер (или сокет закрыт) — пере-ишменяем share
+// по последнему конфигу, чтобы iRMC-сессия не осталась без ответчика.
+function startWatchdog() {
+  stopWatchdog();
+  if (!lastShareCfg) return;
+  wdTimer = setInterval(async () => {
+    const m2Dead = child && child.exitCode != null;
+    const sockDead = activeSock && (activeSock.destroyed || !activeSock.writable);
+    if (!m2Dead && !sockDead) return;
+    try {
+      cleanupShare();
+      if (m2Dead) {
+        m2Port = null; starting = null;
+        await ensureM2();             // поднять M2 заново
+      }
+      const c = lastShareCfg;
+      const r = await shareRaw(c);    // пере-ишменяем share по конфигу
+      if (r.ok) console.error('[m2] watchdog: сессия восстановлена');
+    } catch (e) { console.error('[m2] watchdog: восстановление не удалось:', e.message); }
+  }, 30000);
+  wdTimer.unref?.();
+}
+function stopWatchdog() { if (wdTimer) { clearInterval(wdTimer); wdTimer = null; } }
+function cleanupShare() { stopStats(); if (activeSock) { try { activeSock.destroy(); } catch { } activeSock = null; } }
+async function shareRaw(cfg) {
+  await ensureM2();
+  let ip = cfg.host;
   if (!net.isIPv4(ip)) {
-    const r = await import('node:dns').then((d) => d.promises.lookup(host, { family: 4 }));
+    const r = await import('node:dns').then((d) => d.promises.lookup(cfg.host, { family: 4 }));
     ip = r.address;
   }
-  if (activeSock) { try { activeSock.destroy(); } catch { } activeSock = null; }
   const sock = net.connect(m2Port, '127.0.0.1');
   await new Promise((resolve, reject) => {
     sock.setTimeout(8000, () => { sock.destroy(); reject(new Error('m2 connect timeout')); });
     sock.once('connect', resolve);
     sock.once('error', reject);
   });
-  // начинаем учёт переданных байт (реальный путь M2 читает ISO -> iRMC)
   startStats();
-  // В легаси share идёт по сокету, где уже был discovery (MountDialog).
   const disc = Buffer.alloc(544);
-  disc.writeUInt16LE(5901, 0); // portNumber = StoragePort
-  disc.writeUInt8(0xfe, 5);    // CONNECTION_TYPE = -2
+  disc.writeUInt16LE(5901, 0); disc.writeUInt8(0xfe, 5);
   sock.write(disc);
-  const h = await readN(sock, 19); // 19-байтовый заголовок, длина — hex по смещению 9
+  const h = await readN(sock, 19);
   const plen = parseInt(h.subarray(9, 17).toString('ascii').trim(), 16) || 0;
   if (plen > 0) await readN(sock, plen);
-  // Заголовок StorageShareRequest (connectionType 0xFA) + URSStorage payload.
-  // Нативная проверка: именно с этим заголовком M2 дозванивается до iRMC.
-  const head = Buffer.alloc(544);
-  head.writeUInt8(0xfa, 5);
+  const head = Buffer.alloc(544); head.writeUInt8(0xfa, 5);
   sock.write(head);
-  sock.write(ursPayload({ ip, port, sharePath, shareType }));
-  // Ответ M2 к share может не приходить сразу (успех = тишина, M2 ведёт
-  // URS к iRMC сама). Ждём короткое окно на возможный error, сокет держим.
+  sock.write(ursPayload({ ip, port: cfg.port, sharePath: cfg.sharePath, shareType: cfg.shareType || DT_CD_ISO_IMAGE }));
   let resp = null;
-  try { resp = await readN(sock, 1, 1500); } catch { /* молчим — считаем выпущено */ }
+  try { resp = await readN(sock, 1, 1500); } catch {}
   activeSock = sock;
   return { ok: true, issued: true, code: resp ? resp[0] : null };
+}
+export async function recover() {
+  if (!lastShareCfg) return { ok: false, error: 'нет прошлой сессии' };
+  cleanupShare();
+  const r = await shareRaw(lastShareCfg);
+  return r;
 }
 
 // Отмонтировать: рвём share-сокет (M2 завершает URS-сессию).
 export function unshare() {
-  stopStats();
-  if (activeSock) { try { activeSock.destroy(); } catch { } activeSock = null; }
+  stopWatchdog();
+  cleanupShare();
 }
 
 function ioRchar(pid) {
