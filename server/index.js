@@ -13,7 +13,7 @@ import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { IrmcClient, testIrmc } from './irmc.js';
 import * as ipmi from './ipmi.js';
-import * as metrics from './metrics.js';
+import * as db from './db.js';
 import { listServers, saveServer, deleteServer, getServer, updateServer } from './store.js';
 import { listUsers, saveUser, updateUser, deleteUser, verifyPasswordByLogin, updatePassword, migrateLegacy } from './users-store.js';
 import { decrypt as decryptLegacyBox, getKey } from './crypto-box.js';
@@ -28,13 +28,23 @@ const PORT = Number(process.env.PORT || 1845);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
 
-// === История метрик/сенсоров (БД, п.5) — SQLite data/metrics.sqlite =======
-// Пишет интервальный IPMI-LAN опрос: сенсоры по имени + доступность
-// (ping 0/1, response_ms). Не касается KVM/AVR, поэтому сессии не убиваются.
-metrics.initMetrics();
+// === База собранных IPMI-данных (фаза 2) — data/db/ipmi.sqlite ============
+// Весь сбор (сенсоры/SEL/опросы/инвентарь/версии/события) — в SQLite.
+// ИНВАРИАНТ: rm -rf data/db/ очищает весь сбор и только его — настройки
+// (servers.json, интервалы) вне БД, опрос продолжается сразу.
+// Разовая миграция: старые metrics.sqlite + storage.json -> новая схема;
+// legacy-файлы замораживаются (*.migrated), не удаляются.
+db.initDb();
+{
+  const dataDir = path.join(ROOT, 'data');
+  const migrated = db.migrateLegacy(dataDir, (m) => console.log('[db] ' + m));
+  if (migrated > 0) {
+    db.freezeLegacy(dataDir);
+    console.log(`[db] миграция legacy завершена: ${migrated} записей, старые файлы -> *.migrated`);
+  }
+}
 
-// Офлайн-хранилище (слой A, без мониторинга): снимки last-known, события,
-// история версий — только по факту подключения. data/storage.json (вне git).
+// Монтирования ISO — операционное состояние, остаётся в JSON (storage.js).
 const storage = await import('./storage.js');
 
 // Live console sessions: token -> { cli, listeners, name, host, state }
@@ -349,10 +359,10 @@ const server = http.createServer(async (req, res) => {
       let configChanges = [];
       if (body.serverId) {
         // фактическое подключение: снимок + история версий + событие
-        configChanges = (await storage.saveSnapshot(body.serverId, invMap)).changes;
-        await storage.recordVersionSnapshot(body.serverId, invMap, req.user?.login || null);
-        await storage.addEvent('info', `Данные iRMC получены (${cfg.name || cfg.host})`, body.serverId);
-        for (const c of configChanges) await storage.addEvent('warn', `Изменение конфигурации · ${c.field}: ${c.from} → ${c.to}`, body.serverId);
+        configChanges = db.saveSnapshot(body.serverId, invMap).changes;
+        db.recordVersionSnapshot(body.serverId, invMap, req.user?.login || null);
+        db.addEvent(body.serverId, 'info', `Данные iRMC получены (${cfg.name || cfg.host})`);
+        for (const c of configChanges) db.addEvent(body.serverId, 'warn', `Изменение конфигурации · ${c.field}: ${c.from} → ${c.to}`);
       }
       return json(res, 200, { ok: true, inventory: invMap, configChanges, ...inv });
     } catch {
@@ -363,34 +373,34 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // Офлайн-данные: последний снимок инвентаря сервера (слой A)
+  // Офлайн-данные: последний снимок инвентаря сервера (из БД)
   if (url.pathname.startsWith('/api/last-known/') && req.method === 'GET') {
     const id = decodeURIComponent(url.pathname.slice('/api/last-known/'.length));
-    const lk = await storage.getLastKnown(id);
+    const lk = db.getLastKnown(id);
     if (!lk) return json(res, 404, { ok: false, error: 'нет сохранённых данных' });
     return json(res, 200, { ok: true, ts: lk.ts, inventory: lk.inventory });
   }
 
-  // Журнал изменений конфигурации
+  // Журнал изменений конфигурации (из БД)
   if (url.pathname === '/api/changes' && req.method === 'GET') {
     const serverId = url.searchParams.get('serverId') || null;
     const limit = Number(url.searchParams.get('limit')) || 100;
-    return json(res, 200, { ok: true, changes: await storage.getChanges(serverId, limit) });
+    return json(res, 200, { ok: true, changes: db.getChanges(serverId, limit) });
   }
 
-  // События подключений/обновлений данных
+  // События подключений/обновлений данных (из БД)
   if (url.pathname === '/api/events' && req.method === 'GET') {
     const limit = Math.min(Number(url.searchParams.get('limit')) || 100, 500);
     const serverId = url.searchParams.get('serverId') || null;
-    return json(res, 200, { ok: true, events: await storage.getEvents(limit, serverId) });
+    return json(res, 200, { ok: true, events: db.getEvents(limit, serverId) });
   }
 
-  // История версий оборудования по серверу
+  // История версий оборудования по серверу (из БД)
   if (url.pathname === '/api/versions' && req.method === 'GET') {
     const serverId = url.searchParams.get('serverId');
     if (!serverId) return json(res, 400, { ok: false, error: 'serverId required' });
     const limit = Math.min(Number(url.searchParams.get('limit')) || 50, 500);
-    return json(res, 200, { ok: true, serverId, versions: await storage.getVersions(serverId, limit) });
+    return json(res, 200, { ok: true, serverId, versions: db.getVersions(serverId, limit) });
   }
 
   // Обзор (п.1): серверы + последний опрос (когда/статус) — из базы, без мониторинга
@@ -398,7 +408,7 @@ const server = http.createServer(async (req, res) => {
     const list = await listServers(false);
     const servers = [];
     for (const s of list) {
-      const lk = await storage.getLastKnown(s.id);
+      const lk = db.getLastKnown(s.id);
       let status = 'none';
       if (lk && lk.inventory) {
         const ps = String(lk.inventory['Power LED'] || '').toLowerCase();
@@ -419,14 +429,14 @@ const server = http.createServer(async (req, res) => {
     };
     // Доступность за окно (п.5): из SQLite — питает график/сводку дашборда
     const windowSec = Math.min(Number(url.searchParams.get('window')) || 86400, 30 * 86400);
-    const avSum = metrics.availabilitySummary(windowSec);
+    const avSum = db.availabilitySummary(windowSec);
     const pcts = servers.map((s2) => (avSum[s2.id] && avSum[s2.id].pct !== null ? avSum[s2.id].pct : null)).filter((p) => p !== null);
     const avgPct = pcts.length ? Math.round(pcts.reduce((a, b) => a + b, 0) / pcts.length * 10) / 10 : null;
     return json(res, 200, {
       ok: true, summary, servers,
       availability: {
         avgPct,
-        buckets: metrics.availabilityBuckets(windowSec),
+        buckets: db.availabilityBuckets(windowSec),
         perServer: avSum,
       },
     });
@@ -450,7 +460,7 @@ const server = http.createServer(async (req, res) => {
     if (!name.trim()) return json(res, 400, { ok: false, error: 'укажите имя (name)' });
     try {
       const done = await iso.uploadStream(req, { name, signal: res.req?.req });
-      await storage.addEvent('info', `Загружен ISO · ${done.name} (${done.size} байт)`, null);
+      db.addEvent(null, 'info', `Загружен ISO · ${done.name} (${done.size} байт)`);
       return json(res, 200, { ok: true, image: done });
     } catch (e) { return json(res, 400, { ok: false, error: String(e.message || e) }); }
   }
@@ -518,60 +528,64 @@ const server = http.createServer(async (req, res) => {
     const r = await m2.recover();
     return json(res, r.ok ? 200 : 409, r);
   }
-  // Метрики по IPMI (p.5): сенсоры (темп/кулеры) из кеша интервального опроса
+  // Метрики по IPMI (p.5): сенсоры (темп/кулеры) — из БД (последний опрос).
+  // После рестарта данные сразу из базы, без «прогрева» кеша.
   if (url.pathname === '/api/ipmi/sensors' && req.method === 'GET') {
     const serverId = new URL(req.url, 'http://x').searchParams.get('serverId');
+    const list = await listServers(false);
     if (serverId) {
-      const c = sensorCache.get(serverId);
+      const c = db.pollCache(serverId);
       if (c) return json(res, 200, { ok: true, ...c });
       return json(res, 404, { ok: false, error: 'нет данных опроса' });
     }
     const out = {};
-    for (const [id, s] of sensorCache) out[id] = s;
+    for (const s of list) { const c = db.pollCache(s.id); if (c) out[s.id] = c; }
     return json(res, 200, { ok: true, sensors: out });
   }
-  // SEL-события (журнал IPMI) по серверу из кеша опроса
+  // SEL-события (журнал IPMI) по серверу — из БД (последний снимок SEL)
   if (url.pathname === '/api/ipmi/sel' && req.method === 'GET') {
     const serverId = new URL(req.url, 'http://x').searchParams.get('serverId');
+    const list = await listServers(false);
     if (serverId) {
-      const c = sensorCache.get(serverId);
+      const c = db.pollCache(serverId);
       if (c) return json(res, 200, { ok: true, events: c.events || [], ts: c.ts });
       return json(res, 404, { ok: false, error: 'нет данных опроса' });
     }
     const out = {};
-    for (const [id, s] of sensorCache) out[id] = s.events || [];
+    for (const s of list) { const c = db.pollCache(s.id); if (c) out[s.id] = c.events || []; }
     return json(res, 200, { ok: true, sel: out });
   }
-  // Питание/здоровье (chassis) из кеша
+  // Питание/здоровье (chassis) — из БД
   if (url.pathname === '/api/ipmi/chassis' && req.method === 'GET') {
     const serverId = new URL(req.url, 'http://x').searchParams.get('serverId');
+    const list = await listServers(false);
     if (serverId) {
-      const c = sensorCache.get(serverId);
+      const c = db.pollCache(serverId);
       if (c) return json(res, 200, { ok: true, power: c.power, faults: c.faults, ts: c.ts });
       return json(res, 404, { ok: false, error: 'нет данных опроса' });
     }
     const out = {};
-    for (const [id, s] of sensorCache) { if (s) out[id] = { power: s.power, faults: s.faults }; }
+    for (const s of list) { const c = db.pollCache(s.id); if (c) out[s.id] = { power: c.power, faults: c.faults }; }
     return json(res, 200, { ok: true, chassis: out });
   }
   if (url.pathname === '/api/ipmi/metrics' && req.method === 'GET') {
     const serverId = new URL(req.url, 'http://x').searchParams.get('serverId');
     const windowSec = Math.min(Number(new URL(req.url, 'http://x').searchParams.get('window')) || 86400, 30 * 86400);
     const build = (sid) => {
-      const ping = metrics.series(sid, 'ping', windowSec);
+      const ping = db.series(sid, 'ping', windowSec);
       const up = ping.filter((r) => r[1] >= 1).length;
       return {
-        temps: metrics.avgSeries(sid, 'temp:', windowSec),
-        fans: metrics.avgSeries(sid, 'fan:', windowSec),
-        response_ms: metrics.series(sid, 'response_ms', windowSec),
+        temps: db.avgSeries(sid, 'temp:', windowSec),
+        fans: db.avgSeries(sid, 'fan:', windowSec),
+        response_ms: db.series(sid, 'response_ms', windowSec),
         ping,
         availPct: ping.length ? Math.round((100 * up) / ping.length * 10) / 10 : null,
-        lastValues: metrics.lastValues()[sid] || {},
+        lastValues: db.lastValues()[sid] || {},
       };
     };
     if (serverId) return json(res, 200, { ok: true, ...build(serverId) });
     const out = {};
-    const sids = Object.keys(metrics.lastValues());
+    const sids = Object.keys(db.lastValues());
     for (const sid of sids) out[sid] = build(sid);
     return json(res, 200, { ok: true, series: out });
   }
@@ -588,7 +602,7 @@ const server = http.createServer(async (req, res) => {
     const stale = img.stream; try { stale.destroy(); } catch { }
     const m = await storage.setMount(body.serverId, img.meta, req.user?.login || null);
     const real = await realMount(srv, body.isoId).catch((e) => { console.error('[mount] m2 share failed:', e.message); return false; });
-    await storage.addEvent('info', `Примонтирован ISO «${img.meta.name}» к ${srv.name || srv.host}` + (real ? '' : ' (ожидает открытой сессии)'), body.serverId);
+    db.addEvent(body.serverId, 'info', `Примонтирован ISO «${img.meta.name}» к ${srv.name || srv.host}` + (real ? '' : ' (ожидает открытой сессии)'));
     return json(res, 200, { ok: true, mount: m, real });
   }
   // Отмонтировать (admin)
@@ -602,7 +616,7 @@ const server = http.createServer(async (req, res) => {
       if (srv) realUnmount();
     }
     const ok = await storage.clearMount(serverId);
-    if (ok) await storage.addEvent('info', 'Отмонтирован ISO', serverId);
+    if (ok) db.addEvent(serverId, 'info', 'Отмонтирован ISO');
     return json(res, ok ? 200 : 404, { ok });
   }
 
@@ -882,11 +896,13 @@ server.listen(PORT, () => {
   console.log('GET /api/servers lists stored servers (credentials encrypted at rest).');
 });
 
-// === Метрики по IPMI (p.5, восстановлено): интервальный опрос по LAN =====
+// === Сбор IPMI (p.5): интервальный опрос по LAN -> SQLite (data/db/) ==
 // RMCP+/UDP (623/664), отдельный канал — НЕ трогает AVR/TCP-консоль, поэтому
-// не блокирует и не ломает KVM-сессии вьювера (прежняя причина заморозки).
-const sensorCache = new Map();   // serverId -> {ts, temps, fans, error}
-const selSeen = new Set();       // дедуп критических SEL при записи в БД (см. pollSensors)
+// не блокирует и не ломает KVM-сессии вьювера.
+// Один опрос = одна транзакция (server/db.js recordPoll): справочники,
+// состояние, история изменений, SEL-дедуп (UNIQUE в БД — переживает
+// рестарты), журнал опросов. Упавший опрос не затирает прошлое состояние
+// сервера — в БД видно, что успело собраться до отказа.
 let sensorBusy = false;
 async function pollSensors() {
   if (sensorBusy) return;
@@ -899,32 +915,9 @@ async function pollSensors() {
         const cfg = await getServer(s.id);
         if (!cfg || !cfg.username) return;
         const r = await ipmi.readAll(cfg);
-        const ts = Date.now();
-        const ms = ts - t0;
-        // Доступность опроса (питает график/сводку дашборда, п.1/5)
-        metrics.writeAvailability(s.id, true, ms, ts);
-        sensorCache.set(s.id, {
-          ts, temps: r.temps, fans: r.fans, events: r.events,
-          power: r.power, faults: r.faults, fru: r.fru, error: null,
-        });
-        for (const t of r.temps) metrics.writeMetric(s.id, 'temp:' + t.name, t.value, ts);
-        for (const f of r.fans) metrics.writeMetric(s.id, 'fan:' + f.name, f.value, ts);
-        // Новые SEL-события (критические) — в доменный журнал с меткой ipmi-.
-        // Хост пишет в SEL сотни одинаковых записей, и каждые 60с опрос вернул
-        // бы их заново — дедупликация по (sensor+detail+ts) до записи в БД.
-        for (const ev of r.events || []) {
-          if (ev.level === 'critical') {
-            const dupKey = s.id + '|' + (ev.ts || '') + '|' + (ev.sensor || '') + '|' + (ev.detail || '');
-            if (selSeen.has(dupKey)) continue;
-            if (selSeen.size > 2000) { const f = selSeen.keys().next().value; if (f) selSeen.delete(f); }
-            selSeen.add(dupKey);
-            metrics.addEvent(s.id, 'warn', `IPMI [${ev.sensor}] ${ev.detail || ev.category}`, ts);
-          }
-        }
+        db.recordPoll(s.id, r, Date.now() - t0, Date.now());
       } catch (e) {
-        const ms = Date.now() - t0;
-        metrics.writeAvailability(s.id, false, ms, Date.now());
-        sensorCache.set(s.id, { ts: Date.now(), temps: [], fans: [], events: [], power: null, faults: {}, fru: {}, error: String((e && e.message) || e) });
+        db.recordPollFailure(s.id, Date.now() - t0, String((e && e.message) || e), Date.now());
       }
     }));
   } finally { sensorBusy = false; }
@@ -932,7 +925,7 @@ async function pollSensors() {
 setInterval(pollSensors, 60000);
 pollSensors();
 // Ретеншн истории (п.5.5): чистка > 30 дней каждые 6 часов
-setInterval(() => { try { metrics.prune(30); } catch {} }, 6 * 3600 * 1000);
+setInterval(() => { try { db.prune(30); } catch {} }, 6 * 3600 * 1000);
 
 
 // Graceful shutdown (слой A): при остановке закрываем все консольные

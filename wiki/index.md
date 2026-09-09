@@ -27,6 +27,9 @@ LLM Wiki проекта iRMC Viewer (этап 1). Страницы в `wiki/`, �
   локальный и проводной протоколы, эмуляция на сервере, контроль целостности.
 - [knowledge/irmc-ipmi.md](knowledge/irmc-ipmi.md) — метрики по IPMI-over-LAN
   (RMCP+/UDP 623/664): чтение темп./кулеров, интервальный опрос, не трогает KVM.
+- [knowledge/db-schema.md](knowledge/db-schema.md) — схема SQLite-базы сбора
+  (data/db/): таблицы, транзакция на опрос, дедуп SEL в БД, история только
+  изменений, инвариант rm -rf data/db/, миграция со старой схемы.
 - [knowledge/testing.md](knowledge/testing.md) — стек и best practices
   тестирования фронтенда (node:test + puppeteer e2e-смок), правила ведения.
 
