@@ -14,6 +14,7 @@ import { WebSocketServer } from 'ws';
 import { IrmcClient, testIrmc } from './irmc.js';
 import * as ipmi from './ipmi.js';
 import * as db from './db.js';
+import { checkChannels } from './channels.js';
 import { listServers, saveServer, deleteServer, getServer, updateServer } from './store.js';
 import { listUsers, saveUser, updateUser, deleteUser, verifyPasswordByLogin, updatePassword, migrateLegacy } from './users-store.js';
 import { decrypt as decryptLegacyBox, getKey } from './crypto-box.js';
@@ -403,29 +404,46 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { ok: true, serverId, versions: db.getVersions(serverId, limit) });
   }
 
-  // Обзор (п.1): серверы + последний опрос (когда/статус) — из базы, без мониторинга
+  // Обзор (п.1) по макету 09.09: три канала (ipmi/ping/web) независимы,
+  // статус считается «IPMI главный»: online=ipmi ok; warn=web ✗ при живом
+  // ipmi; problem=ipmi ✗ при живом ping; off=ping ✗ (хост не отвечает).
   if (url.pathname === '/api/overview' && req.method === 'GET') {
     const list = await listServers(false);
     const servers = [];
     for (const s of list) {
+      const st = db.serverStatus(s.id);
       const lk = db.getLastKnown(s.id);
       let status = 'none';
-      if (lk && lk.inventory) {
-        const ps = String(lk.inventory['Power LED'] || '').toLowerCase();
-        status = ps.includes('off') ? 'off' : 'on';
+      const ch = st ? st.channels : null;
+      if (ch) {
+        const ipmiOk = ch.ipmi && ch.ipmi.ok;
+        const pingOk = ch.ping ? ch.ping.ok : null;
+        const webOk = ch.web ? ch.web.ok : null;
+        if (pingOk === false) status = 'off';
+        else if (!ipmiOk) status = 'problem';
+        else if (webOk === false) status = 'warn';
+        else status = 'on';
       }
       servers.push({
         id: s.id, name: s.name, host: s.host, group: s.group || '',
         lastCheck: lk ? lk.ts : null,
         status,
+        channels: ch || { ping: null, web: null, ipmi: null },
+        sensorCount: (() => { try { return Object.keys(db.lastValues()[s.id] || {}).length; } catch { return 0; } })(),
         inventoryCount: lk && lk.inventory ? Object.keys(lk.inventory).length : 0,
       });
     }
     const summary = {
       total: servers.length,
       on: servers.filter((s2) => s2.status === 'on').length,
+      warn: servers.filter((s2) => s2.status === 'warn').length,
+      problem: servers.filter((s2) => s2.status === 'problem').length,
       off: servers.filter((s2) => s2.status === 'off').length,
       none: servers.filter((s2) => s2.status === 'none').length,
+      // проблемы подключения по каналам (макет: «Проблемы подключения»)
+      pingDown: servers.filter((s2) => s2.channels && s2.channels.ping && s2.channels.ping.ok === false).length,
+      webDown: servers.filter((s2) => s2.channels && s2.channels.web && s2.channels.web.ok === false).length,
+      ipmiDown: servers.filter((s2) => s2.channels && s2.channels.ipmi && s2.channels.ipmi.ok === false).length,
     };
     // Доступность за окно (п.5): из SQLite — питает график/сводку дашборда
     const windowSec = Math.min(Number(url.searchParams.get('window')) || 86400, 30 * 86400);
@@ -899,6 +917,9 @@ server.listen(PORT, () => {
 // === Сбор IPMI (p.5): интервальный опрос по LAN -> SQLite (data/db/) ==
 // RMCP+/UDP (623/664), отдельный канал — НЕ трогает AVR/TCP-консоль, поэтому
 // не блокирует и не ломает KVM-сессии вьювера.
+// Три канала доступности (независимы, могут отваливаться по одному):
+//   ping — ICMP-эхо; web — TCP-коннект к web-порту iRMC (БЕЗ HTTP-запроса
+//   и входа — не занимаем веб-сессию BMC); ipmi — факт опроса RMCP+.
 // Один опрос = одна транзакция (server/db.js recordPoll): справочники,
 // состояние, история изменений, SEL-дедуп (UNIQUE в БД — переживает
 // рестарты), журнал опросов. Упавший опрос не затирает прошлое состояние
@@ -911,13 +932,18 @@ async function pollSensors() {
     const list = await listServers(false);
     await Promise.all(list.filter((s) => s.host).map(async (s) => {
       const t0 = Date.now();
+      // ping/web параллельно с IPMI: каждый канал фиксируется сам по себе
+      const channelsPromise = checkChannels({ host: s.host, port: s.port, secure: s.secure })
+        .catch(() => null);
       try {
         const cfg = await getServer(s.id);
         if (!cfg || !cfg.username) return;
         const r = await ipmi.readAll(cfg);
-        db.recordPoll(s.id, r, Date.now() - t0, Date.now());
+        const ch = await channelsPromise;
+        db.recordPoll(s.id, r, Date.now() - t0, Date.now(), ch);
       } catch (e) {
-        db.recordPollFailure(s.id, Date.now() - t0, String((e && e.message) || e), Date.now());
+        const ch = await channelsPromise;
+        db.recordPollFailure(s.id, Date.now() - t0, String((e && e.message) || e), Date.now(), ch);
       }
     }));
   } finally { sensorBusy = false; }

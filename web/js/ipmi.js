@@ -1,4 +1,13 @@
 function hotCls(v){ return v>=45 ? ' class="hot"' : ''; }
+// Сброс карточек-метрик в «нет данных» (выбор сервера без данных /
+// ошибка опроса) — иначе карточки показывали значения ПРЕДЫДУЩЕГО
+// сервера (BUG-004)
+function resetMetrics(){
+  setMetric('mTemp','—',null,'#e23a3a',false); setMetricSub('mTempSub','нет данных');
+  setMetric('mFan','—',null,'#2f6bff',false); setMetricSub('mFanSub','нет данных');
+  setMetric('mResp','—',null,'#e79a2b',false); setMetricSub('mRespSub','опрос IPMI-LAN');
+  setMetric('mAvail','—',null,'#1aa05a',false); setMetricSub('mAvailSub','нет данных');
+}
 // ---- карточки-метрики с историей (вкладка «Обзор» сервера) ----------------
 // Данные: GET /api/ipmi/metrics?serverId= — ряды temps/fans/response_ms из
 // SQLite (интервальный опрос 60с) + lastValues. Графики — мини-спарклайны.
@@ -6,7 +15,8 @@ async function loadMetrics(id){
   if(!id)return;
   const porig=id;
   const j=await api('/api/ipmi/metrics?serverId='+encodeURIComponent(id)+'&window=86400',{_noKick:true});
-  if(id!==sel||!j||!j.ok)return;
+  if(id!==sel)return;
+  if(!j||!j.ok){ resetMetrics(); return; } // нет данных у выбранного — честный сброс
   const lv=j.lastValues||{};
   const lvOf=(k)=>{const m=lv[k];return (m&&m.value!==undefined)?m.value:null;};
   // Температура: среднее по CPU-сенсорам из lastValues, история — avgSeries

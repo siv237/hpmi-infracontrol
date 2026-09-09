@@ -90,3 +90,17 @@
 .ov-table th{font-size:11.5px;font-weight:600;color:var(--muted);text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)}
 .ov-table td{padding:7px 8px;border-bottom:1px solid var(--gray-bg);vertical-align:middle}
 .ov-empty{color:var(--faint);text-align:center;padding:14px}
+
+/* --- Обзор: чип-фильтры статусов + ячейки каналов (макет 09.09) --- */
+.ov-chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.ov-chips .chip{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border-radius:14px;border:1px solid var(--line);background:#fff;font-size:12.5px;font-weight:600;color:var(--muted);cursor:pointer;user-select:none}
+.ov-chips .chip b{font-weight:700;color:var(--ink)}
+.ov-chips .chip.active{border-color:var(--accent);color:var(--accent);background:var(--accent-bg)}
+.ov-chips .chip.ok b{color:var(--green)}.ov-chips .chip.wa b{color:var(--amber)}.ov-chips .chip.pr b,.ov-chips .chip.bad b{color:var(--red)}
+.chcell{display:inline-flex;align-items:center;justify-content:center;min-width:34px;height:22px;padding:0 8px;border-radius:11px;font-size:11.5px;font-weight:700}
+.chcell.ok{background:var(--green-bg);color:var(--green)}
+.chcell.bad{background:var(--red-bg);color:var(--red)}
+.chcell.na{color:var(--muted);font-weight:400}
+.ov-card .kv{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+.ov-card .kv .kv-row{display:flex;justify-content:space-between;align-items:center;font-size:12.5px;color:var(--muted)}
+.ov-card .kv .kv-row .n{font-weight:700;color:var(--ink)}

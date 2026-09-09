@@ -91,62 +91,56 @@
         </div>
         <div class="ov-cards">
           <div class="ov-card">
-            <div class="top"><div class="lbl">Всего серверов</div><div class="ico srv"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/></svg></div></div>
-            <div class="v" id="ovTotal">—</div>
-            <div class="row"><span class="up">↗</span><span>всего в системе</span></div>
+            <div class="top"><div class="lbl">Проблемы подключения</div><div class="ico bad"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M15 9l-6 6M9 9l6 6"/></svg></div></div>
+            <div class="v" id="ovConnProb">—</div>
+            <div class="row"><span>из <b id="ovTotal2">—</b> серверов</span></div>
+            <div class="kv" id="ovConnList">
+              <div class="kv-row"><span class="k">Пинг пропали</span><span class="n" id="ovPingDown">0</span></div>
+              <div class="kv-row"><span class="k">IPMI недоступно</span><span class="n" id="ovIpmiDown">0</span></div>
+              <div class="kv-row"><span class="k">Вебка недоступна</span><span class="n" id="ovWebDown">0</span></div>
+            </div>
           </div>
           <div class="ov-card">
             <div class="top"><div class="lbl">Онлайн</div><div class="ico ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></div></div>
             <div class="v" id="ovUp">—</div>
-            <div class="row"><span class="up">↗</span><b id="ovUpPct">—</b><span>доступно</span></div>
+            <div class="row"><span class="up">↗</span><b id="ovUpPct">—</b><span>все каналы в норме</span></div>
             <div class="bar"><i id="ovUpBar" style="width:0%"></i></div>
+            <div class="kv">
+              <div class="kv-row"><span class="k">Предупреждения (вебка ✗)</span><span class="n" id="ovWarn">0</span></div>
+              <div class="kv-row"><span class="k">Проблемы (IPMI ✗)</span><span class="n" id="ovProb">0</span></div>
+              <div class="kv-row"><span class="k">Оффлайн (пинг ✗)</span><span class="n" id="ovDown">0</span></div>
+            </div>
           </div>
           <div class="ov-card">
-            <div class="top"><div class="lbl">Предупреждения</div><div class="ico warn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg></div></div>
-            <div class="v" id="ovWarn">—</div>
-            <div class="row"><b id="ovWarnPct">—</b><span>требуют внимания</span></div>
-            <div class="bar"><i id="ovWarnBar" style="width:0%;background:var(--amber)"></i></div>
-          </div>
-          <div class="ov-card">
-            <div class="top"><div class="lbl">Оффлайн</div><div class="ico bad"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M15 9l-6 6M9 9l6 6"/></svg></div></div>
-            <div class="v" id="ovDown">—</div>
-            <div class="row"><b id="ovDownPct">—</b><span>недоступно</span></div>
-            <div class="bar"><i id="ovDownBar" style="width:0%;background:var(--red)"></i></div>
+            <div class="top"><div class="lbl">Доступность за 24ч</div><div class="ico warn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg></div></div>
+            <div class="v" id="ovAvailPct">—</div>
+            <div class="row"><span>средняя по серверам</span></div>
+            <div class="bar"><i id="ovAvailBar" style="width:0%;background:var(--ok)"></i></div>
           </div>
         </div>
         <div class="ov-grid">
-          <div class="ov-c">
+          <div class="ov-c" style="grid-column:1/-1">
             <div class="hd">Доступность серверов <span class="sub">(опрос фонового мониторинга)</span> <span class="av-badge" id="ovAvailBadge" style="margin-left:auto">н/д</span></div>
             <canvas id="ovAvail" style="width:100%;height:150px;display:block"></canvas>
             <div class="chart-axis" id="ovAvailAxis"></div>
-          </div>
-          <div class="ov-c">
-            <div class="hd">Распределение по статусам</div>
-            <div class="ov-donut">
-              <div class="ov-donut-chart" id="ovDonut" style="--p-on:0%;--p-wa:0%"><div class="c"><div><span id="ovDonutN">—</span><small>всего серверов</small></div></div></div>
-              <div class="ov-legend" id="ovLegend"></div>
-            </div>
-          </div>
-          <div class="ov-c">
-            <div class="hd">Быстрые действия</div>
-            <div class="qa" id="ovQA">
-              <a class="top" data-action="console"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>Подключиться к консоли<span class="arr">›</span></a>
-              <a data-action="power"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v9M18.4 6.6a9 9 0 1 1-12.8 0"/></svg>Управление питанием<span class="arr">›</span></a>
-              <a data-action="iso"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3a4.5 4.5 0 0 0-1.2 8.9L9 18l3-2 3 2-1.8-6.1A4.5 4.5 0 0 0 12 3z"/></svg>Монтирование ISO<span class="arr">›</span></a>
-              <a data-action="users"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.4"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 4.5a3.4 3.4 0 0 1 0 7M17 20a6 6 0 0 0-3.2-5.3"/></svg>Пользователи и доступ<span class="arr">›</span></a>
-            </div>
           </div>
         </div>
         <div class="ov-layout">
           <div class="ov-c">
             <div class="hd">Серверы</div>
+            <div class="ov-chips" id="ovChips">
+              <span class="chip active" data-f="">Все <b id="chipAll">0</b></span>
+              <span class="chip ok" data-f="on">Онлайн <b id="chipOn">0</b></span>
+              <span class="chip wa" data-f="warn">Предупреждение <b id="chipWa">0</b></span>
+              <span class="chip pr" data-f="problem">Проблемы <b id="chipPr">0</b></span>
+              <span class="chip bad" data-f="off">Оффлайн <b id="chipOff">0</b></span>
+            </div>
             <div class="ov-tools">
               <div class="stool"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><input id="ovSearch" placeholder="Поиск по названию, IP, группе…"></div>
               <select class="sel" id="ovGroupF"><option value="">Все группы</option></select>
-              <select class="sel ov-sel-sm" id="ovStatusF"><option value="">Все статусы</option><option value="on">Онлайн</option><option value="off">Оффлайн</option><option value="none">Нет данных</option></select>
             </div>
             <table class="ov-table">
-              <thead><tr><th style="width:28px"></th><th>Имя</th><th>IPMI IP</th><th>Статус</th><th>Состояние</th><th>Температура</th><th>Группа</th><th>Последняя проверка</th></tr></thead>
+              <thead><tr><th style="width:28px"></th><th>Сервер</th><th>IPMI</th><th>Пинг</th><th>Вебка</th><th>Датчики</th><th>Группа</th><th>Последняя проверка</th></tr></thead>
               <tbody id="ovRows"><tr><td colspan="8" class="ov-empty">Загрузка…</td></tr></tbody>
             </table>
             <div class="ov-pager">

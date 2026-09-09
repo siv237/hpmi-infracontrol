@@ -60,9 +60,11 @@ const EXPECTED_FUNCTIONS = [
   // detail
   'select','hideDetail','showDetail','renderDetail','trustKeys','valFrom','renderSI','renderHWTable',
   // ipmi
-  'hotCls','loadSensors','loadMetrics','setMetric','setMetricSub','drawSpark','clearChart','tempChart','fanChart','respChart','avChart',
+  'hotCls','resetMetrics','loadSensors','loadMetrics','setMetric','setMetricSub','drawSpark','clearChart','tempChart','fanChart','respChart','avChart',
   // inventory
   'loadInv','fmtDump','showVersionHistory',
+  // overview
+  'stChip','chCell','drawAvailabilityChart','loadOverview','renderOverviewRows','buildGroupFilter','startOverview',
   // tabs
   'switchTab',
   // iso

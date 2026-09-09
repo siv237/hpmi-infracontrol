@@ -3,6 +3,11 @@ function select(id){
   sel=id; renderTree();
   try{ localStorage.setItem('ui.sel',id); }catch{}
   showDetail();
+  // сразу отрисовать выбранного из кеша (данные/«—») — панель всегда
+  // соответствует выбору, не ждём сетевых ответов (недоступный сервер
+  // отвечает таймаутом; раньше всё это время висел прежний сервер — BUG-004)
+  renderDetail();
+  if(typeof resetMetrics==='function')resetMetrics();
   loadInv(id);
   loadSensors(id);
   loadMetrics(id);

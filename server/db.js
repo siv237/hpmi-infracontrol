@@ -68,21 +68,28 @@ export function initDb(dbFile = DB_FILE) {
     );
     CREATE INDEX IF NOT EXISTS idx_sh ON sensor_history (server_id, name, ts);
 
-    -- Состояние сервера: одна строка на сервер (upsert)
+    -- Состояние сервера: одна строка на сервер (upsert). Три канала
+    -- доступности могут отваливаться НЕЗАВИСИМО (владелец: «вебка виснет,
+    -- а ping/IPMI живы»): ping (ICMP), web (TCP-порт), ipmi (опрос).
     CREATE TABLE IF NOT EXISTS server_state (
       server_id TEXT NOT NULL PRIMARY KEY,
-      up INTEGER NOT NULL,           -- 0/1: последний опрос успешен/нет
+      up INTEGER NOT NULL,           -- 0/1: последний IPMI-опрос успешен/нет
       last_ok_ts INTEGER,            -- последний успешный опрос
       last_poll_ts INTEGER,          -- любой опрос
       response_ms REAL,              -- длительность последнего успешного опроса
       power TEXT,                    -- on | off | null
       faults TEXT NOT NULL DEFAULT '{}', -- JSON {drive,cooling,intrusion,powerFault}
       fru TEXT NOT NULL DEFAULT '{}',    -- JSON FRU-снимок (оборудование)
-      poll_error TEXT
+      poll_error TEXT,
+      ping_ok INTEGER,               -- 0/1/null: ICMP-эхо последней проверки
+      ping_ms REAL,
+      web_ok INTEGER,                -- 0/1/null: TCP web-порт (без HTTP!)
+      web_ms REAL
     );
 
     -- Журнал опросов: каждый опрос каждого сервера (успех или ошибка).
-    -- Питает ряды ping/response_ms и сводки доступности.
+    -- Питает ряды ping/response_ms и сводки доступности. Каналы ping/web
+    -- фиксируются в server_state (сводно) — их история в опросе не нужна.
     CREATE TABLE IF NOT EXISTS polls (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       ts INTEGER NOT NULL,
@@ -167,6 +174,12 @@ export function initDb(dbFile = DB_FILE) {
     );
     CREATE INDEX IF NOT EXISTS idx_events_ts ON events (ts);
   `);
+  // Живая база могла быть создана до трёхканальной схемы — доставляем
+  // недостающие колонки (ping_ok/ping_ms/web_ok/web_ms) безопасно.
+  const cols = new Set(db.prepare('PRAGMA table_info(server_state)').all().map((c) => c.name));
+  for (const [col, ddl] of [['ping_ok', 'INTEGER'], ['ping_ms', 'REAL'], ['web_ok', 'INTEGER'], ['web_ms', 'REAL']]) {
+    if (!cols.has(col)) db.exec(`ALTER TABLE server_state ADD COLUMN ${col} ${ddl}`);
+  }
   return db;
 }
 
@@ -177,13 +190,15 @@ function tx(fn) {
 // === Запись опроса =========================================================
 
 // Один успешный опрос = одна транзакция. r = результат ipmi.readAll():
-// {temps[], fans[], events[], power, faults, fru}. Возвращает счётчики
+// {temps[], fans[], events[], power, faults, fru}. channels = результат
+// checkChannels (ping/web) — опционально. Возвращает счётчики
 // (для логов). Обрыв во время записи -> откат целиком, полусобранных
 // опросов в БД не бывает.
-export function recordPoll(serverId, r, durationMs, ts = Date.now()) {
+export function recordPoll(serverId, r, durationMs, ts = Date.now(), channels = null) {
   if (!db) initDb();
   const result = { changedValues: 0, newSel: 0, transitions: [] };
   const newSelEvents = [];
+  const ch = channels || {};
   tx(() => {
     // 1. Справочник сенсоров + состояние + история (только изменения)
     const insSensor = db.prepare('INSERT INTO sensors (server_id, name, kind, units, first_ts, last_ts) VALUES (?,?,?,?,?,?) ON CONFLICT(server_id,name) DO UPDATE SET last_ts=excluded.last_ts');
@@ -199,18 +214,25 @@ export function recordPoll(serverId, r, durationMs, ts = Date.now()) {
     for (const t of r.temps || []) put(t.name, 'temp', 'degrees C', t.value);
     for (const f of r.fans || []) put(f.name, 'fan', 'RPM', f.value);
 
-    // 2. Состояние сервера + переходы доступности/питания
-    const st = db.prepare('SELECT up, power FROM server_state WHERE server_id=?').get(serverId);
+    // 2. Состояние сервера + переходы доступности/питания. Три канала
+    //    (ping/web/ipmi) независимы: web может висеть при живых ping/ipmi.
+    const st = db.prepare('SELECT up, power, ping_ok, web_ok FROM server_state WHERE server_id=?').get(serverId);
     const wasUp = st ? st.up : null;
     const wasPower = st ? st.power : null;
-    db.prepare(`INSERT INTO server_state (server_id, up, last_ok_ts, last_poll_ts, response_ms, power, faults, fru, poll_error)
-      VALUES (?,?,?,?,?,?,?,?,NULL)
+    db.prepare(`INSERT INTO server_state (server_id, up, last_ok_ts, last_poll_ts, response_ms, power, faults, fru, poll_error, ping_ok, ping_ms, web_ok, web_ms)
+      VALUES (?,?,?,?,?,?,?,?,NULL,?,?,?,?)
       ON CONFLICT(server_id) DO UPDATE SET
         up=excluded.up, last_ok_ts=excluded.last_ok_ts, last_poll_ts=excluded.last_poll_ts,
         response_ms=excluded.response_ms, power=excluded.power, faults=excluded.faults,
         fru=CASE WHEN excluded.fru='{}' THEN server_state.fru ELSE excluded.fru END,
-        poll_error=NULL`)
-      .run(serverId, 1, ts, ts, durationMs, r.power ?? null, JSON.stringify(r.faults || {}), JSON.stringify(r.fru || {}));
+        poll_error=NULL,
+        ping_ok=COALESCE(excluded.ping_ok, server_state.ping_ok),
+        ping_ms=COALESCE(excluded.ping_ms, server_state.ping_ms),
+        web_ok=COALESCE(excluded.web_ok, server_state.web_ok),
+        web_ms=COALESCE(excluded.web_ms, server_state.web_ms)`)
+      .run(serverId, 1, ts, ts, durationMs, r.power ?? null, JSON.stringify(r.faults || {}), JSON.stringify(r.fru || {}),
+        ch.ping ? (ch.ping.ok ? 1 : 0) : null, ch.ping ? ch.ping.ms : null,
+        ch.web ? (ch.web.ok ? 1 : 0) : null, ch.web ? ch.web.ms : null);
     // первое наблюдение up или восстановление после down — переход в историю
     if (wasUp === null || wasUp === 0) {
       db.prepare('INSERT INTO avail_changes (server_id, ts, up, response_ms) VALUES (?,?,1,?)').run(serverId, ts, durationMs);
@@ -246,17 +268,22 @@ export function recordPoll(serverId, r, durationMs, ts = Date.now()) {
 
 // Неудавшийся опрос: тоже транзакция. Данные сервера не затираются —
 // остаётся последнее успешное состояние + фиксируется момент отказа.
-export function recordPollFailure(serverId, durationMs, error, ts = Date.now()) {
+// Каналы ping/web при отказе IPMI НЕ трогаем (они могли быть живы).
+export function recordPollFailure(serverId, durationMs, error, ts = Date.now(), channels = null) {
   if (!db) initDb();
+  const ch = channels || {};
   let wentDown = false;
   tx(() => {
     const st = db.prepare('SELECT up FROM server_state WHERE server_id=?').get(serverId);
     wentDown = !!(st && st.up === 1);
-    db.prepare(`INSERT INTO server_state (server_id, up, last_ok_ts, last_poll_ts, response_ms, power, faults, fru, poll_error)
-      VALUES (?,0,NULL,?,NULL,NULL,'{}','{}',?)
+    db.prepare(`INSERT INTO server_state (server_id, up, last_ok_ts, last_poll_ts, response_ms, power, faults, fru, poll_error, ping_ok, ping_ms, web_ok, web_ms)
+      VALUES (?,0,NULL,?,NULL,NULL,'{}','{}',?,?,NULL,?,NULL)
       ON CONFLICT(server_id) DO UPDATE SET
-        up=0, last_poll_ts=excluded.last_poll_ts, poll_error=excluded.poll_error`)
-      .run(serverId, ts, String(error || ''));
+        up=0, last_poll_ts=excluded.last_poll_ts, poll_error=excluded.poll_error,
+        ping_ok=COALESCE(excluded.ping_ok, server_state.ping_ok),
+        ping_ms=COALESCE(excluded.ping_ms, server_state.ping_ms)`)
+      .run(serverId, ts, String(error || ''),
+        ch.ping ? (ch.ping.ok ? 1 : 0) : null, ch.ping ? ch.ping.ms : null);
     db.prepare('INSERT INTO polls (ts, server_id, ok, duration_ms, error) VALUES (?,?,0,?,?)').run(ts, serverId, durationMs, String(error || ''));
     if (wentDown) db.prepare('INSERT INTO avail_changes (server_id, ts, up, response_ms) VALUES (?,?,0,NULL)').run(serverId, ts);
   });
@@ -363,7 +390,8 @@ export function sensorValues(serverId) {
     WHERE s.server_id=? ORDER BY s.kind, s.name`).all(serverId);
 }
 
-// Состояние сервера: up/lastOkTs/power/faults/pollError/responseMs
+// Состояние сервера: up/lastOkTs/power/faults/pollError/responseMs +
+// три канала: ping {ok,ms}, web {ok,ms}, ipmi {ok} — независимы.
 export function serverStatus(serverId) {
   if (!db) initDb();
   const r = db.prepare('SELECT * FROM server_state WHERE server_id=?').get(serverId);
@@ -371,7 +399,15 @@ export function serverStatus(serverId) {
   let faults = {}, fru = {};
   try { faults = JSON.parse(r.faults || '{}'); } catch {}
   try { fru = JSON.parse(r.fru || '{}'); } catch {}
-  return { up: !!r.up, lastOkTs: r.last_ok_ts, lastPollTs: r.last_poll_ts, responseMs: r.response_ms, power: r.power, faults, fru, pollError: r.poll_error || null };
+  return {
+    up: !!r.up, lastOkTs: r.last_ok_ts, lastPollTs: r.last_poll_ts, responseMs: r.response_ms,
+    power: r.power, faults, fru, pollError: r.poll_error || null,
+    channels: {
+      ping: r.ping_ok === null ? null : { ok: !!r.ping_ok, ms: r.ping_ms },
+      web: r.web_ok === null ? null : { ok: !!r.web_ok, ms: r.web_ms },
+      ipmi: { ok: !!r.up },
+    },
+  };
 }
 
 // Текущие значения по каждому серверу. Ключи — с префиксами, как в старой
@@ -507,6 +543,11 @@ export function pollCache(serverId) {
     ts: st.last_poll_ts, temps, fans, events,
     power: st.power, faults, fru,
     error: st.poll_error || null, up: !!st.up,
+    channels: {
+      ping: st.ping_ok === null ? null : { ok: !!st.ping_ok, ms: st.ping_ms },
+      web: st.web_ok === null ? null : { ok: !!st.web_ok, ms: st.web_ms },
+      ipmi: { ok: !!st.up },
+    },
   };
 }
 
