@@ -189,7 +189,7 @@ echo "[deploy] каталог $APP_DIR"
 install -d -o root -g root "$APP_DIR"
 # runtime-каталоги (владелец — пользователь сервиса)
 grep -q "^$APP_USER:" /etc/passwd || useradd -r -s "$APP_USER_SHELL" -d "$APP_DIR" "$APP_USER"
-install -d -o "$APP_USER" -g "$APP_USER" "$APP_DIR/data" "$APP_DIR/data/db" "$APP_DIR/data/iso" "$APP_DIR/logs"
+install -d -o "$APP_USER" -g "$APP_USER" "$APP_DIR/data" "$APP_DIR/data/db" "$APP_DIR/data/iso" "$APP_DIR/logs" "$APP_DIR/screenshots"
 chmod 755 "$APP_DIR/start.sh" || true
 
 # ---------- перенос настроек (если включено и в бандле) ----------
