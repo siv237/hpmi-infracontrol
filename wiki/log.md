@@ -816,3 +816,16 @@ Java↔M2 и проводной M2↔iRMC протоколы, JSON-эмуляц�
 - BUG-001..005 все закрыты. BUG-002 переведён в wontfix по решению
   владельца («уже не чинится, убираем») — диагноз и материалы
   (irmc-mouse.md) сохранены. Открытых багов нет.
+
+## [2026-09-09] query | Спецификация сервера деплоя
+Изучен целевой хост деплоя: RED OS 8.0.3 (vm), SELinux off, firewalld
+inactive; локальные репо DGK/base/kernels6/updates; nodejs 24+npm в репо;
+ipmitool уже установлен. Создана служебная страница
+wiki/knowledge/server-deploy.md (вне git, с адресами).
+
+## [2026-09-09] project | Схема деплоя на прод-сервер
+Создан ./deploy.sh (bundle|push|full) + .env.example: код+node_modules+
+runtime M2 собираются локально в офлайн-бандл и заливаются tar-over-ssh;
+на сервере dnf-окружение (nodejs 24 + nodejs-devel + gcc, офлайн-сборка
+better-sqlite3), systemd через ./start.sh, nginx TLS-прокси (самоподписанный
+сертификат) на 127.0.0.1:1845. Компания-параметры в .env (вне git).

@@ -7,6 +7,9 @@ data/
 # локальная страница wiki с тестовыми учётками (пароли не публикуем)
 wiki/knowledge/test-accounts.md
 
+# служебная информация сервера деплоя (имена/адреса/внутренние параметры)
+wiki/knowledge/server-deploy.md
+
 # runtime screenshots
 screenshots/
 
@@ -22,3 +25,9 @@ avr_irmc_s2*.jar
 
 # env
 .env
+
+# офлайн-бандл деплоя (код + node_modules + runtime-ресурсы)
+infracontrol-bundle.tgz
+
+# кэш загруженных заголовков Node для офлайн-сборки native-модулей
+.cache/

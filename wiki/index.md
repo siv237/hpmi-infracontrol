@@ -32,6 +32,9 @@ LLM Wiki проекта iRMC Viewer (этап 1). Страницы в `wiki/`, �
   изменений, инвариант rm -rf data/db/, миграция со старой схемы.
 - [knowledge/testing.md](knowledge/testing.md) — стек и best practices
   тестирования фронтенда (node:test + puppeteer e2e-смок), правила ведения.
+- [knowledge/server-deploy.md](knowledge/server-deploy.md) — ⚙ служебная
+  (вне git): спецификация сервера деплоя (OS, сеть, репозитории, установленный
+  софт, что ставит deploy.sh).
 
 ## Баги
 
