@@ -20,8 +20,9 @@ function showPage(id){
   if(id==='iso')loadIso();
   if(id==='overview')startOverview();
   if(id==='logs')loadLogs();
+  if(id==='groups'){initGroupsPage();loadGroupsPage();}
 }
-const IMPLEMENTED=new Set(['servers','users','iso','overview','logs']);
+const IMPLEMENTED=new Set(['servers','users','iso','overview','logs','groups']);
 document.querySelectorAll('.nav-item').forEach(n=>{
   n.onclick=()=>{
     const id=n.getAttribute('data-id');

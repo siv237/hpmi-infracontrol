@@ -6,7 +6,7 @@
 
 import http from 'node:http';
 import net from 'node:net';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile as fsWriteFile, mkdir as fsMkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -204,8 +204,85 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/ui' && req.method === 'GET') {
     try {
       const cfg = JSON.parse(await readFile(path.join(ROOT, 'data', 'ui.json'), 'utf8'));
-      return json(res, 200, { ok: true, rootName: String(cfg.rootName || '').trim() || 'Все серверы' });
-    } catch { return json(res, 200, { ok: true, rootName: 'Все серверы' }); }
+      return json(res, 200, {
+        ok: true,
+        rootName: String(cfg.rootName || '').trim() || 'Все серверы',
+        roots: Array.isArray(cfg.roots) ? cfg.roots.map(String) : [],
+        groups: Array.isArray(cfg.groups) ? cfg.groups.filter(g => g && typeof g.name === 'string') : [],
+      });
+    } catch { return json(res, 200, { ok: true, rootName: 'Все серверы', roots: [], groups: [] }); }
+  }
+  // Изменение структуры дерева (admin): rootName; roots/groups — объявленные
+  // корни-организации и группы (могут быть пустыми), серверы ссылаются на них
+  // через поля root/group (servers.json). Дерево смешивает: объявленное +
+  // фактическое по серверам.
+  if (url.pathname === '/api/ui' && req.method === 'PUT') {
+    if (req.user.role !== 'admin') return json(res, 403, { ok: false, error: 'требуются права администратора' });
+    const body = await readJson(req, res);
+    if (!body) return;
+    try {
+      const file = path.join(ROOT, 'data', 'ui.json');
+      let cfg = {};
+      try { cfg = JSON.parse(await readFile(file, 'utf8')); } catch {}
+      if (body.rootName !== undefined) cfg.rootName = String(body.rootName).trim() || 'Все серверы';
+      if (!Array.isArray(cfg.roots)) cfg.roots = [];
+      if (!Array.isArray(cfg.groups)) cfg.groups = [];
+      const grpOf = (g) => ({ root: String((g && g.root) || '').trim(), name: String((g && g.name) || '').trim() });
+      if (body.addRoot !== undefined) {
+        const v = String(body.addRoot).trim();
+        if (v && !cfg.roots.includes(v)) cfg.roots.push(v);
+      }
+      if (body.delRoot !== undefined) {
+        const v = String(body.delRoot).trim();
+        cfg.roots = cfg.roots.filter(r => r !== v);
+        cfg.groups = cfg.groups.filter(g => grpOf(g).root !== v);
+      }
+      if (body.renameRoot && typeof body.renameRoot === 'object') {
+        const { from, to } = body.renameRoot;
+        const f = String(from || '').trim(), t = String(to || '').trim();
+        if (f && t) {
+          cfg.roots = cfg.roots.map(r => (r === f ? t : r));
+          cfg.groups = cfg.groups.map(g => (grpOf(g).root === f ? { root: t, name: g.name } : g));
+        }
+      }
+      if (body.addGroup && typeof body.addGroup === 'object') {
+        const { root, name } = grpOf(body.addGroup);
+        if (name && !cfg.groups.some(g => grpOf(g).root === root && grpOf(g).name === name)) cfg.groups.push({ root, name });
+      }
+      if (body.delGroup && typeof body.delGroup === 'object') {
+        const { root, name } = grpOf(body.delGroup);
+        cfg.groups = cfg.groups.filter(g => !(grpOf(g).root === root && grpOf(g).name === name));
+      }
+      if (body.renameGroup && typeof body.renameGroup === 'object') {
+        const rg = body.renameGroup;
+        const root = String(rg.root || '').trim(), from = String(rg.from || '').trim(), to = String(rg.to || '').trim();
+        if (from && to) cfg.groups = cfg.groups.map(g => (grpOf(g).root === root && g.name === from ? { ...g, root, name: to } : g));
+      }
+      // Описание группы (адрес/ответственный/контакты/заметки). renameFrom —
+      // переименование заодно с сохранением меты; если объявления не было,
+      // оно создаётся (так «описывается» авто-филиал по IP).
+      if (body.setGroupMeta && typeof body.setGroupMeta === 'object') {
+        const sg = body.setGroupMeta;
+        const root = String(sg.root || '').trim();
+        const from = String(sg.renameFrom || sg.name || '').trim();
+        const to = String(sg.name || '').trim();
+        if (from && to) {
+          let g = cfg.groups.find(x => grpOf(x).root === root && String(x.name).trim() === from);
+          if (!g) { g = { root, name: to }; cfg.groups.push(g); }
+          g.name = to;
+          const m = sg.meta || {};
+          const clean = (v) => String(v || '').trim();
+          g.desc = clean(m.desc); g.loc = clean(m.loc); g.owner = clean(m.owner);
+          g.contact = clean(m.contact); g.notes = clean(m.notes);
+        }
+      }
+      await fsMkdir(path.join(ROOT, 'data'), { recursive: true });
+      await fsWriteFile(file, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+      return json(res, 200, {
+        ok: true, rootName: cfg.rootName || 'Все серверы',
+        roots: cfg.roots, groups: cfg.groups,
+      });
+    } catch (e) { return json(res, 500, { ok: false, error: String(e.message || e) }); }
   }
 
   if (url.pathname === '/api/test' && req.method === 'POST') {
@@ -425,7 +502,7 @@ const server = http.createServer(async (req, res) => {
         else status = 'on';
       }
       servers.push({
-        id: s.id, name: s.name, host: s.host, group: s.group || '',
+        id: s.id, name: s.name, host: s.host, group: s.group || '', root: s.root || '',
         lastCheck: lk ? lk.ts : null,
         status,
         channels: ch || { ping: null, web: null, ipmi: null },

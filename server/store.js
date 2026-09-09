@@ -33,6 +33,8 @@ function mask(entry) {
     username: entry.usernamePlain || '',
     port: entry.port,
     secure: entry.secure,
+    group: entry.group || '',
+    root: entry.root || '',
     hasPassword: !!(entry.enc),
     createdAt: entry.createdAt,
   };
@@ -50,7 +52,7 @@ export async function listServers(withSecrets = false) {
   });
 }
 
-export async function saveServer({ name, host, username, password, port = 80, secure = false, httpdata = '' }) {
+export async function saveServer({ name, host, username, password, port = 80, secure = false, httpdata = '', group = '', root = '' }) {
   await getKey();
   const db = await readDb();
   const id = crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
@@ -62,6 +64,8 @@ export async function saveServer({ name, host, username, password, port = 80, se
     usernamePlain: username,
     port,
     secure,
+    group: group === null || group === undefined ? '' : String(group).trim(),
+    root: root === null || root === undefined ? '' : String(root).trim(),
     enc,
     createdAt: new Date().toISOString(),
   };
@@ -79,6 +83,8 @@ export async function updateServer(id, patch) {
   if (patch.secure !== undefined) e.secure = !!patch.secure;
   if (patch.name !== undefined) e.name = patch.name;
   if (patch.host !== undefined) { e.host = patch.host; }
+  if (patch.group !== undefined) e.group = patch.group === null || patch.group === '' ? '' : String(patch.group).trim();
+  if (patch.root !== undefined) e.root = patch.root === null || patch.root === '' ? '' : String(patch.root).trim();
   // optionally update creds if provided
   if (patch.username !== undefined || patch.password !== undefined || patch.httpdata !== undefined || patch.host !== undefined) {
     const dec = e.enc ? decrypt(e.enc) : { host: e.host, username: e.usernamePlain || '', password: '', httpdata: '' };

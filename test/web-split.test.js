@@ -8,7 +8,7 @@ const ROOT = '/home/siv/proj/IPMI-Viewer';
 const web = join(ROOT, 'web');
 
 const CSS_FILES = ['base.css','components.css','dashboard.css','servers.css','console.css','events.css','logs.css','ui.css'];
-const JS_FILES = ['core.js','events.js','tree.js','detail.js','ipmi.js','network.js','inventory.js','tabs.js','iso.js','users.js','tree-controls.js','console.js','layout.js','overview.js','logs.js','auth.js','init.js'];
+const JS_FILES = ['core.js','events.js','tree.js','detail.js','ipmi.js','network.js','inventory.js','tabs.js','iso.js','users.js','groups.js','tree-controls.js','console.js','layout.js','overview.js','logs.js','auth.js','init.js'];
 
 const idx = readFileSync(join(web, 'index.html'), 'utf8');
 const html = idx.slice(idx.indexOf('<body>'), idx.indexOf('</body>') + '</body>'.length);
@@ -56,7 +56,9 @@ const EXPECTED_FUNCTIONS = [
   // events
   'addEvent','renderEvents',
   // tree
-  'load','treeFilter','branchKey','loadUiConfig','loadExpanded','saveExpanded','renderTree','delServer','restoreDetail',
+  'load','treeFilter','branchKey','groupKeyOf','rootKeyOf','srvRootName','loadUiConfig','loadExpanded','saveExpanded','treeRootsOf','serversOfRoot','isDeclaredGroup','treeGroupsOf','cmpGroups','leafHtml','groupNodesHtml','renderTree','uiStructureChanged','attachTreeDnd','clearDropMarks','moveServerToGroup','closeTreeMenu','showTreeMenu','attachTreeCtxMenu','promptDialog','refreshUiFromResp','renameRoot','addUiGroup','addUiRoot','renameUiRoot','delUiRoot','renameGroup','resetGroup','moveServerAsk','delServer','restoreDetail',
+  // groups
+  'grpMetaOf','grpHasMeta','grpBadge','grpBoardHtml','loadGroupsPage','grpRefresh','grpPickRoot','grpMetaDlg','grpDelete','grpBoardClick','grpExpandToggle','initGroupsPage',
   // detail
   'select','hideDetail','showDetail','renderDetail','renderKpiNet','loadActiveTab','trustKeys','valFrom','renderSI','renderHWTable',
   // ipmi
