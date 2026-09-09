@@ -100,6 +100,7 @@ async function loadSensors(id){
   const sn=$('snTable'), snInfo=$('snInfo');
   const j=await api('/api/ipmi/sensors?serverId='+encodeURIComponent(id),{_noKick:true});
   if(id!==sel)return;
+  if(j&&j.ok&&j.net){ dbgNet[id]=j.net; try{renderDetail();}catch{} } // KPI сети
   if(!j||!j.ok||!(j.temps||j.fans)){
     const msg='нет данных опроса'+(j&&j.error?(' ('+esc(j.error)+')'):'');
     if(snInfo)snInfo.textContent=msg;

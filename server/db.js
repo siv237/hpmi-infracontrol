@@ -29,6 +29,8 @@ const DB_FILE = path.join(DB_DIR, 'ipmi.sqlite');
 
 const KEY_FIELDS = ['System Type', 'Chassis Type', 'Serial', 'System GUID', 'BIOS Version', 'System Name', 'System O/S', 'System IP'];
 const VERSION_FIELDS = ['BIOS Version', 'Firmware Revision', 'iRMC Version', 'iRMC Firmware', 'OEM', 'System O/S', 'OS Version', 'System Name', 'Serial', 'System GUID'];
+// Ключевые СЕТЕВЫЕ поля BMC: смена любого — config_change + событие
+const NET_FIELDS = ['ip', 'subnet', 'gateway', 'mac', 'ipSource', 'vlan', 'bmcFirmware', 'ipmiVersion'];
 
 let db = null;
 
@@ -84,7 +86,8 @@ export function initDb(dbFile = DB_FILE) {
       ping_ok INTEGER,               -- 0/1/null: ICMP-эхо последней проверки
       ping_ms REAL,
       web_ok INTEGER,                -- 0/1/null: TCP web-порт (без HTTP!)
-      web_ms REAL
+      web_ms REAL,
+      net TEXT NOT NULL DEFAULT '{}' -- JSON: сетевые настройки BMC (lan print + mc info)
     );
 
     -- Журнал опросов: каждый опрос каждого сервера (успех или ошибка).
@@ -174,10 +177,14 @@ export function initDb(dbFile = DB_FILE) {
     );
     CREATE INDEX IF NOT EXISTS idx_events_ts ON events (ts);
   `);
-  // Живая база могла быть создана до трёхканальной схемы — доставляем
-  // недостающие колонки (ping_ok/ping_ms/web_ok/web_ms) безопасно.
+  // Живая база могла быть создана до трёхканальной/сетевой схемы —
+  // доставляем недостающие колонки безопасно.
   const cols = new Set(db.prepare('PRAGMA table_info(server_state)').all().map((c) => c.name));
-  for (const [col, ddl] of [['ping_ok', 'INTEGER'], ['ping_ms', 'REAL'], ['web_ok', 'INTEGER'], ['web_ms', 'REAL']]) {
+  for (const [col, ddl] of [
+    ['ping_ok', 'INTEGER'], ['ping_ms', 'REAL'],
+    ['web_ok', 'INTEGER'], ['web_ms', 'REAL'],
+    ['net', "TEXT NOT NULL DEFAULT '{}'"],
+  ]) {
     if (!cols.has(col)) db.exec(`ALTER TABLE server_state ADD COLUMN ${col} ${ddl}`);
   }
   return db;
@@ -216,11 +223,29 @@ export function recordPoll(serverId, r, durationMs, ts = Date.now(), channels = 
 
     // 2. Состояние сервера + переходы доступности/питания. Три канала
     //    (ping/web/ipmi) независимы: web может висеть при живых ping/ipmi.
+    //    Сетевые настройки BMC (lan print/mc info) — снимок в server_state;
+    //    смена ключевых сетевых полей = config_change + событие.
     const st = db.prepare('SELECT up, power, ping_ok, web_ok FROM server_state WHERE server_id=?').get(serverId);
     const wasUp = st ? st.up : null;
     const wasPower = st ? st.power : null;
-    db.prepare(`INSERT INTO server_state (server_id, up, last_ok_ts, last_poll_ts, response_ms, power, faults, fru, poll_error, ping_ok, ping_ms, web_ok, web_ms)
-      VALUES (?,?,?,?,?,?,?,?,NULL,?,?,?,?)
+    const netChanged = [];
+    if (r.net && Object.keys(r.net).length) {
+      const prevRow = db.prepare('SELECT net FROM server_state WHERE server_id=?').get(serverId);
+      if (prevRow && prevRow.net && prevRow.net !== '{}') {
+        try {
+          const prevNet = JSON.parse(prevRow.net);
+          for (const f of NET_FIELDS) {
+            const a = String(prevNet[f] ?? ''), b = String(r.net[f] ?? '');
+            if (a !== b) {
+              netChanged.push({ field: f, from: a || '—', to: b || '—' });
+              db.prepare('INSERT INTO config_changes (ts, server_id, field, prev, next) VALUES (?,?,?,?,?)').run(ts, serverId, 'NET: ' + f, a || '—', b || '—');
+            }
+          }
+        } catch { /* повреждённый JSON — перезапишем */ }
+      }
+    }
+    db.prepare(`INSERT INTO server_state (server_id, up, last_ok_ts, last_poll_ts, response_ms, power, faults, fru, poll_error, ping_ok, ping_ms, web_ok, web_ms, net)
+      VALUES (?,?,?,?,?,?,?,?,NULL,?,?,?,?,?)
       ON CONFLICT(server_id) DO UPDATE SET
         up=excluded.up, last_ok_ts=excluded.last_ok_ts, last_poll_ts=excluded.last_poll_ts,
         response_ms=excluded.response_ms, power=excluded.power, faults=excluded.faults,
@@ -229,10 +254,12 @@ export function recordPoll(serverId, r, durationMs, ts = Date.now(), channels = 
         ping_ok=COALESCE(excluded.ping_ok, server_state.ping_ok),
         ping_ms=COALESCE(excluded.ping_ms, server_state.ping_ms),
         web_ok=COALESCE(excluded.web_ok, server_state.web_ok),
-        web_ms=COALESCE(excluded.web_ms, server_state.web_ms)`)
+        web_ms=COALESCE(excluded.web_ms, server_state.web_ms),
+        net=CASE WHEN excluded.net='{}' THEN server_state.net ELSE excluded.net END`)
       .run(serverId, 1, ts, ts, durationMs, r.power ?? null, JSON.stringify(r.faults || {}), JSON.stringify(r.fru || {}),
         ch.ping ? (ch.ping.ok ? 1 : 0) : null, ch.ping ? ch.ping.ms : null,
-        ch.web ? (ch.web.ok ? 1 : 0) : null, ch.web ? ch.web.ms : null);
+        ch.web ? (ch.web.ok ? 1 : 0) : null, ch.web ? ch.web.ms : null,
+        JSON.stringify(r.net || {}));
     // первое наблюдение up или восстановление после down — переход в историю
     if (wasUp === null || wasUp === 0) {
       db.prepare('INSERT INTO avail_changes (server_id, ts, up, response_ms) VALUES (?,?,1,?)').run(serverId, ts, durationMs);
@@ -262,6 +289,10 @@ export function recordPoll(serverId, r, durationMs, ts = Date.now(), channels = 
   for (const t of result.transitions) {
     if (t === 'up') addEvent(serverId, 'info', 'IPMI-опрос восстановлен', ts);
     else if (t.startsWith('power:')) addEvent(serverId, 'info', `Питание: ${t.slice(6) === 'on' ? 'включено' : 'выключено'}`, ts);
+  }
+  // смена сетевых настроек BMC — в единый журнал (после транзакции)
+  for (const c of netChanged) {
+    addEvent(serverId, 'warn', `Сеть BMC · ${c.field}: ${c.from} → ${c.to}`, ts);
   }
   return result;
 }
@@ -399,9 +430,11 @@ export function serverStatus(serverId) {
   let faults = {}, fru = {};
   try { faults = JSON.parse(r.faults || '{}'); } catch {}
   try { fru = JSON.parse(r.fru || '{}'); } catch {}
+  let net = {};
+  try { net = JSON.parse(r.net || '{}'); } catch {}
   return {
     up: !!r.up, lastOkTs: r.last_ok_ts, lastPollTs: r.last_poll_ts, responseMs: r.response_ms,
-    power: r.power, faults, fru, pollError: r.poll_error || null,
+    power: r.power, faults, fru, pollError: r.poll_error || null, net,
     channels: {
       ping: r.ping_ok === null ? null : { ok: !!r.ping_ok, ms: r.ping_ms },
       web: r.web_ok === null ? null : { ok: !!r.web_ok, ms: r.web_ms },
@@ -548,6 +581,7 @@ export function pollCache(serverId) {
       web: st.web_ok === null ? null : { ok: !!st.web_ok, ms: st.web_ms },
       ipmi: { ok: !!st.up },
     },
+    net: (() => { try { return JSON.parse(st.net || '{}'); } catch { return {}; } })(),
   };
 }
 

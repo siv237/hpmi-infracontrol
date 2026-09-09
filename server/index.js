@@ -586,6 +586,20 @@ const server = http.createServer(async (req, res) => {
     for (const s of list) { const c = db.pollCache(s.id); if (c) out[s.id] = { power: c.power, faults: c.faults }; }
     return json(res, 200, { ok: true, chassis: out });
   }
+  // Сетевые настройки BMC (lan print + mc info) — из БД, последний опрос.
+  // MAC — часть данных (4a): в БД, в карточке, поиск по нему.
+  if (url.pathname === '/api/ipmi/network' && req.method === 'GET') {
+    const serverId = new URL(req.url, 'http://x').searchParams.get('serverId');
+    const list = await listServers(false);
+    if (serverId) {
+      const c = db.pollCache(serverId);
+      if (c) return json(res, 200, { ok: true, net: c.net || {}, ts: c.ts, up: c.up });
+      return json(res, 404, { ok: false, error: 'нет данных опроса' });
+    }
+    const out = {};
+    for (const s of list) { const c = db.pollCache(s.id); if (c) out[s.id] = c.net || {}; }
+    return json(res, 200, { ok: true, network: out });
+  }
   if (url.pathname === '/api/ipmi/metrics' && req.method === 'GET') {
     const serverId = new URL(req.url, 'http://x').searchParams.get('serverId');
     const windowSec = Math.min(Number(new URL(req.url, 'http://x').searchParams.get('window')) || 86400, 30 * 86400);

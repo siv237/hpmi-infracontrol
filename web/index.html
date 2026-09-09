@@ -227,6 +227,10 @@
                   <div class="kpi"><div class="lab">Модель</div><div class="val" id="kpiModel">—</div><div class="sub" id="kpiSub">—</div></div>
                   <div class="kpi"><div class="lab">Серийный №</div><div class="val" id="kpiSerial">—</div><div class="sub" id="kpiSerialSub">Система</div></div>
                 </div>
+                <div class="grid grid-status" id="kpiNetRow" style="margin-top:10px">
+                  <div class="kpi"><div class="lab">MAC BMC</div><div class="val" id="kpiMac" style="font-size:14px">—</div><div class="sub" id="kpiMacSub">сетевой интерфейс iRMC</div></div>
+                  <div class="kpi"><div class="lab">Прошивка BMC</div><div class="val" id="kpiBmcFw" style="font-size:14px">—</div><div class="sub" id="kpiBmcFwSub">IPMI <span id="kpiIpmiVer">—</span></div></div>
+                </div>
 
                 <div class="grid grid-metrics">
                   <div class="kpi kpi-m"><div class="lab">Температура</div>
@@ -305,7 +309,14 @@
                 </div>
               </div>
               <div class="tabpane" id="pane-network" style="display:none">
-                <div class="placeholder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5 5 0 0 1 7 0"/></svg><div class="tt">Сеть</div><div class="ds">Модуль в разработке.</div></div>
+                <div class="panel">
+                  <div class="ph">Сеть BMC (IPMI) <span class="ph-sub" id="netInfo"></span></div>
+                  <table class="si" id="netTable"><tr><td class="v">Загрузка…</td></tr></table>
+                </div>
+                <div class="panel" style="margin-top:12px">
+                  <div class="ph">Сырые данные <span class="ph-sub">lan print / mc info</span></div>
+                  <table class="si" id="netRawTable"><tr><td class="v">—</td></tr></table>
+                </div>
               </div>
               <div class="tabpane" id="pane-storage" style="display:none">
                 <div class="mount-card" id="storageCard">
@@ -560,6 +571,7 @@
 <script src="/js/tree.js"></script>
 <script src="/js/detail.js"></script>
 <script src="/js/ipmi.js"></script>
+<script src="/js/network.js"></script>
 <script src="/js/inventory.js"></script>
 <script src="/js/tabs.js"></script>
 <script src="/js/iso.js"></script>

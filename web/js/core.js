@@ -12,6 +12,7 @@ const dbgStatus={};   // serverId -> 'on'|'err'
 const dbgInv={};      // serverId -> inventory map
 const dbgLastKnown={}; // serverId -> ts последнего снимка из базы
 const dbgPower={};    // serverId -> 'on'|'off'|'unknown'
+const dbgNet={};      // serverId -> сетевой снимок BMC (lan print/mc info)
 
 const ROLE_LABEL={admin:'Администратор',user:'Пользователь'};
 

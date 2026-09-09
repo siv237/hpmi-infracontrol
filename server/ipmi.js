@@ -143,13 +143,87 @@ export async function readFru(opts) {
   return { host: opts.host, fru };
 }
 
-// Все данные одним вызовом (сенсоры + SEL + питание + FRU).
+// Парсинг `lan print` (сетевые настройки BMC). Многострочные значения
+// (Auth Type Enable, Cipher Suite Priv Max) схлопываем: ключ без значения
+// накапливает последующие строки-продолжения.
+function parseLan(out) {
+  const o = {};
+  let lastKey = null;
+  for (const line of out.split('\n')) {
+    if (!line.trim()) { lastKey = null; continue; }
+    const m = line.match(/^([A-Za-z0-9 ./()-]+?)\s*:\s*(.*)$/);
+    if (m) {
+      const k = m[1].trim().toLowerCase().replace(/[\s/]+/g, '_').replace(/\.1q_/g, '_');
+      o[k] = m[2].trim();
+      lastKey = o[k] === '' ? k : null;
+    } else if (lastKey && /^\s+:\s+/.test(line)) {
+      // продолжение многострочного блока «        : User : MD5 PASSWORD»
+      o[lastKey] += '\n' + line.trim();
+    } else if (lastKey) {
+      o[lastKey] += '\n' + line.trim();
+    } else {
+      const m2 = line.match(/^\s+:\s+(.+)$/);
+      if (m2) { o._tail = (o._tail || '') + '\n' + m2[1]; }
+    }
+  }
+  return o;
+}
+
+// Парсинг `mc info` (identity BMC): Device ID/FW/IPMI ver/Manufacturer.
+function parseMcInfo(out) {
+  const o = {};
+  for (const line of out.split('\n')) {
+    const m = line.match(/^([A-Za-z0-9 /_.]+?)\s*:\s*(.+)$/);
+    if (!m) continue;
+    const k = m[1].trim().toLowerCase().replace(/[\s/]+/g, '_');
+    o[k] = m[2].trim();
+  }
+  return o;
+}
+
+// Сеть BMC «по максималке»: lan print (IP/маска/GW/MAC/DHCP|Static/VLAN/
+// SNMP/RMCP+) + mc info (прошивка BMC, IPMI version, производитель).
+// Читающие команды, интерактивных сессий не создают.
+export async function readNetwork(opts) {
+  const { host, username, password } = opts;
+  const base = ['-I', 'lanplus', '-H', host, '-U', username, '-P', password || ''];
+  const env = { ...process.env, IPMITOOL_PASS: password || '' };
+  const [lan, mc] = await Promise.all([
+    run(base, ['lan', 'print'], env, 15000),
+    run(base, ['mc', 'info'], env, 15000),
+  ]);
+  const lanO = parseLan(lan);
+  const mcO = parseMcInfo(mc);
+  // нормализованный вид для UI/БД (сырые поля тоже отдаём)
+  const net = {
+    ip: lanO.ip_address || '',
+    subnet: lanO.subnet_mask || '',
+    gateway: lanO.default_gateway_ip || '',
+    mac: (lanO.mac_address || '').toUpperCase(),
+    ipSource: /dhcp/i.test(lanO.ip_address_source || '') ? 'dhcp' : (lanO.ip_address ? 'static' : ''),
+    vlan: /disabled/i.test(lanO['8021q_vlan_id'] || '') ? null : (lanO['8021q_vlan_id'] || null),
+    vlanPriority: lanO['8021q_vlan_priority'] || null,
+    snmp: lanO.snmp_community_string || '',
+    bmcArp: lanO.bmc_arp_control || '',
+    cipherSuites: lanO.rmcp_cipher_suites || '',
+    // BMC identity
+    bmcFirmware: mcO.firmware_revision || '',
+    ipmiVersion: mcO.ipmi_version || '',
+    manufacturer: mcO.manufacturer_name || '',
+    manufacturerId: mcO.manufacturer_id || '',
+    productId: mcO.product_id || '',
+  };
+  return { host: opts.host, net, lan: lanO, mc: mcO };
+}
+
+// Все данные одним вызовом (сенсоры + SEL + питание + FRU + сеть BMC).
 export async function readAll(opts) {
-  const [sensors, sel, chassis, fru] = await Promise.all([
+  const [sensors, sel, chassis, fru, net] = await Promise.all([
     readSensors(opts).catch(() => ({ temps: [], fans: [] })),
     readSEL(opts, 100).catch(() => ({ events: [] })),
     readChassis(opts).catch(() => ({ power: null, faults: {} })),
     readFru(opts).catch(() => ({ fru: {} })),
+    readNetwork(opts).catch(() => ({ net: {} })),
   ]);
   return {
     host: opts.host,
@@ -159,5 +233,6 @@ export async function readAll(opts) {
     power: chassis.power === undefined ? null : chassis.power,
     faults: chassis.faults || {},
     fru: fru.fru || {},
+    net: net.net || {},
   };
 }

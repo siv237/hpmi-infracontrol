@@ -24,7 +24,11 @@ function renderTree(){
   const q=treeFilter();
   const tree=$('tree');
   if(!servers.length){tree.innerHTML='<div class="tree-empty">Серверы не добавлены.'+(isAdmin()?'<br>Нажмите «Добавить».':'')+'</div>';return;}
-  const matched=servers.filter(s=>!q||(s.name||'').toLowerCase().includes(q)||(s.host||'').toLowerCase().includes(q));
+  const matched=servers.filter(s=>!q
+    ||(s.name||'').toLowerCase().includes(q)
+    ||(s.host||'').toLowerCase().includes(q)
+    ||(dbgNet[s.id]&&String(dbgNet[s.id].mac||'').toLowerCase().includes(q)) // поиск по MAC (4a.3)
+    ||(s.group||'').toLowerCase().includes(q));
   // корень дерева (имя — локальный конфиг) -> филиалы по двум октетам IP
   const groups=new Map();
   matched.forEach(s=>{const k=branchKey(s.host);if(!groups.has(k))groups.set(k,[]);groups.get(k).push(s);});

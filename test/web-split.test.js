@@ -8,7 +8,7 @@ const ROOT = '/home/siv/proj/IPMI-Viewer';
 const web = join(ROOT, 'web');
 
 const CSS_FILES = ['base.css','components.css','dashboard.css','servers.css','console.css','events.css','logs.css','ui.css'];
-const JS_FILES = ['core.js','events.js','tree.js','detail.js','ipmi.js','inventory.js','tabs.js','iso.js','users.js','tree-controls.js','console.js','layout.js','overview.js','logs.js','auth.js','init.js'];
+const JS_FILES = ['core.js','events.js','tree.js','detail.js','ipmi.js','network.js','inventory.js','tabs.js','iso.js','users.js','tree-controls.js','console.js','layout.js','overview.js','logs.js','auth.js','init.js'];
 
 const idx = readFileSync(join(web, 'index.html'), 'utf8');
 const html = idx.slice(idx.indexOf('<body>'), idx.indexOf('</body>') + '</body>'.length);
@@ -58,9 +58,11 @@ const EXPECTED_FUNCTIONS = [
   // tree
   'load','treeFilter','branchKey','loadUiConfig','loadExpanded','saveExpanded','renderTree','delServer','restoreDetail',
   // detail
-  'select','hideDetail','showDetail','renderDetail','trustKeys','valFrom','renderSI','renderHWTable',
+  'select','hideDetail','showDetail','renderDetail','renderKpiNet','loadActiveTab','trustKeys','valFrom','renderSI','renderHWTable',
   // ipmi
   'hotCls','resetMetrics','loadSensors','loadMetrics','setMetric','setMetricSub','drawSpark','clearChart','tempChart','fanChart','respChart','avChart',
+  // network
+  'netRow','renderNetwork','loadNetwork',
   // inventory
   'loadInv','fmtDump','showVersionHistory',
   // overview
