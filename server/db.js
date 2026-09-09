@@ -205,6 +205,7 @@ export function recordPoll(serverId, r, durationMs, ts = Date.now(), channels = 
   if (!db) initDb();
   const result = { changedValues: 0, newSel: 0, transitions: [] };
   const newSelEvents = [];
+  const netChanged = []; // смотреть на сетевые изменения нужно и после tx — вне её
   const ch = channels || {};
   tx(() => {
     // 1. Справочник сенсоров + состояние + история (только изменения)
@@ -228,7 +229,6 @@ export function recordPoll(serverId, r, durationMs, ts = Date.now(), channels = 
     const st = db.prepare('SELECT up, power, ping_ok, web_ok FROM server_state WHERE server_id=?').get(serverId);
     const wasUp = st ? st.up : null;
     const wasPower = st ? st.power : null;
-    const netChanged = [];
     if (r.net && Object.keys(r.net).length) {
       const prevRow = db.prepare('SELECT net FROM server_state WHERE server_id=?').get(serverId);
       if (prevRow && prevRow.net && prevRow.net !== '{}') {
