@@ -2,9 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
 import { execSync, spawnSync } from 'node:child_process';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = '/home/siv/proj/IPMI-Viewer';
+// Корень репозитория вычисляем от расположения теста — не привязываемся к
+// абсолютному пути конкретной машины (иначе тест падает у любого, кроме автора).
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const web = join(ROOT, 'web');
 
 const CSS_FILES = ['base.css','components.css','dashboard.css','servers.css','console.css','events.css','ui.css'];
