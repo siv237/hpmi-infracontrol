@@ -12,6 +12,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { IrmcClient, testIrmc } from './irmc.js';
+import { openHpConsole } from './hp.js';
 import { IvtpClient } from './console-ivtp.js';
 import * as ipmi from './ipmi.js';
 import * as db from './db.js';
@@ -140,10 +141,17 @@ async function cachedSession(cfg) {
 async function startSession(sess, host, user, pass, port, secure) {
   // креды держим в памяти сессии — авто-реконнект поднимает то же подключение
   sess.creds = { host, user, pass, port, secure };
-  const cfg = await cachedSession({ host, username: user, password: pass, port, secure });
+  let cfg = null;
+  try {
+    cfg = await cachedSession({ host, username: user, password: pass, port, secure });
+  } catch (e) {
+    // HP LO100i: на «/» нет avr.jnlp (веб — обычный HTML-меню); KVM-консоль
+    // открывается модулем server/hp.js (свежий httpdata + паддинги 16/20/128).
+    if (!/avr\.jnlp/i.test(String(e.message || ''))) throw e;
+  }
   // S4 (AMI/IVTP): getSession вернул kvmtoken+webcookie — консоль другим
   // движком (CONNECT-туннель на web-порт), не Mahogany-AVR.
-  if (cfg.s4Sid) {
+  if (cfg?.s4Sid) {
     const cli = new IvtpClient({ ...cfg, host, username: user }, {
       onStatus: (s) => {
         sess.status.push(s);
@@ -170,7 +178,9 @@ async function startSession(sess, host, user, pass, port, secure) {
     }, 10000);
     return sess;
   }
-  const cli = new IrmcClient(cfg, {
+  // AVR-консоль: iRMC (cfg из avr.jnlp) или HP LO100i (свежий httpdata из
+  // kvms.html через server/hp.js). События общие для обоих.
+  const events = {
     onStatus: (s) => {
       sess.status.push(s);
       if (s.startsWith('vesa:')) {
@@ -190,7 +200,10 @@ async function startSession(sess, host, user, pass, port, secure) {
       sess.lastFrameAt = Date.now();
       for (const cb of sess.listeners) cb(fb, rects);
     },
-  });
+  };
+  const cli = cfg
+    ? new IrmcClient(cfg, events)
+    : await openHpConsole({ host, port, secure, username: user, password: pass }, events);
   sess.cli = cli;
   await cli.start();
   // Static/black screens produce no change-frames, so the framebuffer stays

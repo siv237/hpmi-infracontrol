@@ -699,8 +699,48 @@ Java↔M2 и проводной M2↔iRMC протоколы, JSON-эмуляц�
 - Тест-стек: `node:test` (unit/интеграция) + e2e-смок `puppeteer-core` (HTML/модулей/инициализации). `npm test` (unit), `npm run test:e2e` (требует `./start.sh`+CHROME, сам сервер не поднимает). Best practices — `knowledge/testing.md`.
 - Unit-тесты защищают разрез: нет inline монолита, модули на месте, синтаксис связки, набор функций без потерь/дублей имён, `$("id")` в HTML, роут сервера.
 
+## [2026-09-10] ingest | raw/M2.JAR: HP Lights-Out 100 говорит на Mahogany
+- Пользователь принёс M2.JAR (684 КБ, 2009) — jar KVM-апплета HP LO100
+  (DL180 G6). Декомпилирован CFR-ом в /tmp/m2_decomp/ (пакеты
+  com.serverengines.mahogany / mahoganyprotocol / storage / nativeinterface
+  / kvm — тот же код, что avr_irmc_s2.jar, но с паддингами 16/20/128).
+- На живом BMC HP 192.168.6.51 проверено: digest-логин работает нашим
+  digestGet; kvms.html отдаёт апплет ARCHIVE="M2.JAR" c параметрами
+  NonSecure_KVMPort=80, sessiontype=kvm, port=5901, httpdata=<hex-токен>.
+- Вывод: мост и декодер уже совместимы с HP; отличия — порт KVM 80,
+  httpdata-токен вместо пароля (BMC выдаёт после digest-логина), паддинги.
+  План модуля server/hp.js и таблица отличий — knowledge/hp-lo100-kvm.md.
+- BMC рвёт подряд идущие HTTP-запросы (ECONNRESET) — ретраи + пауза ≥2 с.
+
+## [2026-09-08] project | Рабочее окружение форка: npm через зеркало, фиксы переносимости
+- Поднято окружение на машине форка `yuristwood/hpmi-infracontrol` (git, gh,
+  Node 22.22, npm, ipmitool, chromium). Зависимости установлены через
+  `registry.npmmirror.com` — registry.npmjs.org из этой сети нестабилен
+  (npm виснет на half-open сокетах, ERR_SOCKET_TIMEOUT). Подробности и обход —
+  новая страница `knowledge/dev-env.md`.
+- Замечен и починен в рабочей копии (не закоммичено — по правилам AGENTS.md):
+  захардкоженный путь автора в `test/web-split.test.js` (тест падал на любой
+  чужой машине) и `npm test` = `node --test test/` (не работает на Node 22 →
+  `test/*.test.js`).
+- `npm test`: 23 теста — 22 pass, 1 skip (e2e ждёт сервер), 0 fail.
+  `better-sqlite3` проверен на нативном пребилде.
+
 ## [2026-09-08] project | Вкладка «Журналы» (IPMI SEL) + фикс F5 (BUG-001)
 - Журналы — по макету InfraControl («Уведомления»): двухколоночная страница
+
+## [2026-09-10] ingest | raw/M2.JAR: HP ProLiant DL180 G6 / Lights-Out 100i
+Декомпилирован `M2.JAR` (CFR 0.152) — Mahogany-вьювер для HP LO100i
+(DL180 G6). Подтверждено: тот же Avocent-стек, что у iRMC — рукопожатие
+(0x5A5A5A5A/0x12121212, ServerHandshake 200 → ClientHandshake 221, прив. 31,
+ClientNOP) и таблицы команд совпадают. Отличия: паддинги кредов 16/20/128
+(у iRMC 48/48/228), нет digest-сигнатуры 0x13131313, SSL через настройку
+`connect.as.method=1` + TrustManager «доверять всем». В jar — LIBM2-32/64.SO
+(тот же нативный движок, что грузит m2host.py у iRMC). Создана страница
+`knowledge/hp-lo100i-m2.md`. Слияние с upstream/main (11e4b9f, модульная
+база Серёги: db.js, channels.js, дерево/группы, deploy.sh) — конфликты
+только в wiki/index.md+log.md, разрешены объединением. Готов план: профиль
+BMC (flavor) в IrmcClient — профили fujitsu-irmc / hp-lo100i.
+
   (фильтры+таблица слева, детали справа). Данные — **SEL по IPMI API**:
   `GET /api/ipmi/sel` (кеш опроса 60с, см. knowledge/irmc-ipmi.md), поля
   `{id, ts, sensor, detail, category, level}`; имена серверов/групп — из
@@ -945,3 +985,19 @@ better-sqlite3), systemd через ./start.sh, nginx TLS-прокси (само
   SCCI ConfigSpace OE=1633 (Java/HTML5 режим AVR). Синтез —
   wiki/knowledge/irmc-s4-ivtp.md.
 - npm test 30/30.
+
+## [2026-09-10] project | HP LO100i: модуль KVM server/hp.js — консоль работает
+- `server/hp.js`: `fetchKvmApplet(cfg)` (digest GET /kvms.html, ретраи с паузой
+  ≥2 c — BMC рвёт ECONNRESET) + `openHpConsole(cfg, events)` → `IrmcClient` с
+  `pad:{user:16,pass:20,full:128}`, `port=NonSecure_KVMPort`, `httpdata`=токен
+  из kvms.html (не пароль).
+- `server/irmc.js` `wire()`: паддинги полей сделаны настраиваемыми через
+  `opts.pad` (iRMC по умолчанию 48/48/228, HP 16/20/128) — поведение iRMC
+  не изменилось.
+- `server/index.js` `startSession`: если `cachedSession` падает «no avr.jnlp
+  link in page» — пробуем HP-ветку (openHpConsole); события консоли вынесены
+  в общий объект.
+- Подтверждено на живом 192.168.6.51 (DL180 G6, fw 4.22): /api/connect →
+  state=live 1024×768, /api/snapshot отдаёт кадр (PNG ~11.5 КБ).
+- Реестр bmc-registry.js: hp-lo100 получает CAP.KVM_AVR. npm test 30/30.
+

@@ -70,6 +70,18 @@ const MODULES = [
     ],
   },
   {
+    id: 'hp-lo100',
+    title: 'HP Lights-Out 100 / LO100i (ProLiant G5/G6)',
+    priority: 80,
+    match: (sig) => !!sig.manufacturer && /hewlett-packard|^hp$|hp proliant/i.test(sig.manufacturer),
+    caps: [CAP.IPMI_LAN, CAP.WEB_DIGEST, CAP.WEB_INVENTORY, CAP.KVM_AVR],
+    quirks: [
+      'веб только HTTP:80, Digest (realm = hostname); подряд идущие HTTP-запросы рвёт ECONNRESET — ретраи с паузой ≥2 c',
+      'KVM: kvms.html отдаёт апплет MahoganyViewer ARCHIVE="M2.JAR" — тот же AVR-протокол; токен httpdata из апплета вместо пароля, паддинги 16/20/128, KVM-порт = NonSecure_KVMPort (обычно 80); модуль server/hp.js — worked (live 192.168.6.51)',
+      'проброс ISO: в jar есть LIBM2-*.SO (как у iRMC) + отдельная вкладка Virtual Storage — требует проверки',
+    ],
+  },
+  {
     id: 'generic-ipmi',
     title: 'Generic IPMI 2.0 (без известного веба)',
     priority: 10,
