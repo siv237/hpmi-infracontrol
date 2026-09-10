@@ -31,12 +31,17 @@
 import net from 'node:net';
 import tls from 'node:tls';
 import crypto from 'node:crypto';
+import os from 'node:os';
 
 const IVTP = {
-  HID: 1, PAUSE: 4, RESUME: 6, STOP_IMMEDIATE: 8, GET_FULL_SCREEN: 11,
+  HID: 1, PAUSE: 4, RESUME: 6, STOP_IMMEDIATE: 8, BLANK_SCREEN: 9,
+  GET_USB_MOUSE_MODE: 10, GET_FULL_SCREEN: 11,
   VALIDATE_VIDEO_SESSION: 18, VALIDATE_VIDEO_SESSION_RESPONSE: 19,
-  GET_KEYBD_LED: 20, GET_WEB_TOKEN: 21, VIDEO_FRAGMENT: 25,
-  POWER_STATUS: 34, KVM_DISCONNECT: 54,
+  GET_KEYBD_LED: 20, GET_WEB_TOKEN: 21, SESSION_ACCEPTED: 23,
+  VIDEO_FRAGMENT: 25, SET_MOUSE_MODE: 28, POWER_STATUS: 34,
+  CONF_SERVICE_STATUS: 37, MOUSE_MEDIA_INFO: 38, GET_ACTIVE_CLIENTS: 39,
+  GET_USER_MACRO: 40, KVM_SHARING: 51, MEDIA_LICENSE_STATUS: 53,
+  KVM_DISCONNECT: 54, SET_KBD_LANG: 55,
 };
 
 function ivtpHdr(type, size, status = 0) {
@@ -203,17 +208,30 @@ export class IvtpClient {
     // [21] webcookie
     const wc = Buffer.from(String(webcookie || ''), 'latin1');
     this.sock.write(Buffer.concat([ivtpHdr(IVTP.GET_WEB_TOKEN, wc.length), wc]));
-    // [18] validate: tokenType(1) + kvmtoken<=130 + ip<=65 + user<=129 + mac<=45; total 381
+    // [18] validate: JViewer (OnsendWebsessionToken, JViewerApp.java:1739):
+    // [0]=0 tokenType, token@1..129(129б), ownIP@130..194(65б), user@195..323(129б), MAC@324..372(49б, aa-bb-..-cc)
+    // BMC по ownIP отличает реальных клиентов от внутренних (127.0.0.1 = web-preview, видео не шлёт).
     const body = Buffer.alloc(381 - 8, 0);
     let p = 0;
     body[p++] = 0; // WEB_SESSION_TOKEN
     p += body.write(String(kvmtoken || ''), p, 129, 'latin1');
     p = 130;
-    // own IP: с туннеля видно localhost — JViewer шлёт локальный адрес сокета
-    p += body.write('127.0.0.1', p, 64, 'latin1');
+    // own IP: реальный адрес интерфейса (как socket.getLocalAddress() в JViewer;
+    // 127.0.0.1 BMC считает внутренним preview-клиентом и видео не шлёт)
+    let ownIp = '';
+    let mac = '';
+    for (const lists of Object.values(os.networkInterfaces())) {
+      for (const it of lists) {
+        if (it.family !== 'IPv4' || it.internal) continue;
+        ownIp = it.address;
+        mac = (it.mac || '').toLowerCase().replace(/:/g, '-');
+        break;
+      }
+    }
+    if (ownIp) p += body.write(ownIp, p, 64, 'latin1');
     p = 130 + 65;
     p += body.write(String(username || ''), p, 128, 'latin1');
-    // MAC — локальный; JViewer берёт первый интерфейс. Не критично: pad нулями.
+    if (mac) body.write(mac, 324, 48, 'latin1');
     this.sock.write(Buffer.concat([ivtpHdr(IVTP.VALIDATE_VIDEO_SESSION, 381 - 8), body]));
     // [6] resume
     this.sock.write(ivtpHdr(IVTP.RESUME, 0));
@@ -246,23 +264,53 @@ export class IvtpClient {
         if (h.status === 0 || h.status === 1) {
           this.state = 'live';
           this.events.onStatus?.('session:valid');
-          // JViewer сразу просит полный экран — без запроса BMC держит тишину
-          // (кадры пойдут только при изменениях; blank-экран вообще молчит).
+          // JViewer-последовательность после валидации (OnValidVideoSession):
+          // [51] lockscreen=2, [34] power, [40] macro, [11] полный экран.
+          // ВНИМАНИЕ: [28] SET_MOUSE_MODE и [55] SET_KBD_LANG с payload 0
+          // BMC воспринимает как ошибку и рвёт TCP через ~1.5с — не слать!
+          this.sock?.write(Buffer.concat([ivtpHdr(51, 1, 0), Buffer.from([2])]));
+          this.sock?.write(ivtpHdr(34, 0));
+          this.sock?.write(ivtpHdr(40, 0));
           this.sock?.write(ivtpHdr(IVTP.GET_FULL_SCREEN, 0));
         } else {
           this.events.onError?.('S4: валидация сессии отклонена (status=' + h.status + ')');
           this.close();
         }
         break;
-      case IVTP.BLANK_SCREEN:
-        this._blank = true;
+      case IVTP.GET_ACTIVE_CLIENTS:
+        // BMC спрашивает клиентов -> JViewer отвечает повторным запросом
+        // полного экрана; без отклика BMC рвёт сессию по таймауту.
+        this.sock?.write(ivtpHdr(IVTP.GET_FULL_SCREEN, 0));
         break;
+      case IVTP.GET_USB_MOUSE_MODE: break;    // [10] текущий mouse-mode — игнор
+      case IVTP.CONF_SERVICE_STATUS: break;   // [37] какие виртуальные носители есть
+      case IVTP.MEDIA_LICENSE_STATUS: break;  // [53] статус лицензии медиа
+      case IVTP.MOUSE_MEDIA_INFO: break;      // [38] кол-ва инстансов
+      case IVTP.SET_KBD_LANG: break;           // [55]-ответ
+      case IVTP.BLANK_SCREEN: {
+        // BMC: «нет сигнала с хоста» (JViewer рисует nosignal.jpg). Даём
+        // фреймбуфер-заглушку, чтобы клиент видел серый экран (а не 0x0),
+        // и статус blank (фронт подписывает «Нет сигнала»). Повторные [9]
+        // не дублируем (переход false->true только).
+        if (!this._blank) {
+          this._blank = true;
+          this.fb.pix = new Uint32Array(1024 * 768);
+          this.fb.width = 1024; this.fb.height = 768;
+          this.fb.pix.fill(0xff3a3a3a); // тёмно-серый «нет сигнала»
+          this.events.onStatus?.('blank:no-signal');
+          this.events.onFrame?.(this.fb, null);
+        }
+        break;
+      }
       case IVTP.STOP_IMMEDIATE:
-      case IVTP.KVM_DISCONNECT:
-        this.events.onStatus?.('отключено сервером (type=' + h.type + ')');
+        this.events.onStatus?.('отключено сервером (type=' + h.type + ' status=' + h.status + ')');
         this.close();
         break;
-      default: break; // палитра/атрибуты/курсор/питание — пока игнорируем
+      case IVTP.KVM_DISCONNECT:
+        this.events.onStatus?.('KVM-канал закрыт сервером');
+        this.close();
+        break;
+      default: break; // прочее — игнорируем
     }
   }
 
@@ -286,20 +334,23 @@ export class IvtpClient {
     const f = this._frameHdr(raw);
     // Мусорные/неполные кадры отбрасываем (как JViewer.onResolutionChange)
     if (f.resX < 300 || f.resX > 1920 || f.resY < 200 || f.resY > 1200) return;
+    if (this._blank) {
+      this._blank = false; // пошло реальное видео — заглушка не нужна
+      this.events.onStatus?.('blank:off');
+    }
     if (this.fb.resize(f.resX, f.resY)) {
       this.events.onStatus?.(`vesa:${f.resX}x${f.resY}@${f.bytesPP * 8}`);
+    }
+    // PIII-путь (comp 8/10): тайлы + планарные пиксели (VESA32FrameHndlr
+    // .handleTileData_PIII). Иной формат — старые план-обработчики ниже.
+    if (f.compressionType === 8 || f.compressionType === 10) {
+      this._blitPIII(raw, f);
+      this.events.onFrame?.(this.fb, null);
+      return;
     }
     let pixels;
     switch (f.compressionType) {
       case 0: case 10: pixels = raw.subarray(34); break;
-      case 8: {
-        // drle_PIII 24bpp: байтовый DrleBuffer (RCODE 0x55 / TCODE 0xAA)
-        const need = f.resX * f.resY * (f.bytesPP === 4 ? 4 : f.bytesPP);
-        const dst = Buffer.alloc(Math.max(need, raw.length));
-        const n = drleBytes(raw, 34, 34 + f.frameSize, dst);
-        pixels = dst.subarray(0, n);
-        break;
-      }
       case 6: {
         const bpp = f.bytesPP;
         const dst = Buffer.alloc(Math.max(f.resX * f.resY * (bpp === 4 ? 4 : 2) + 34, raw.length * 4));
@@ -332,19 +383,67 @@ export class IvtpClient {
     };
   }
 
+  // Планарный 32bpp PIII-кадр (comp 8/10): точный порт
+  // VESA32FrameHndlr.handleTileData_PIII. После тайл-заголовка кадр лежит
+  // bytesPP-планами: план0=B, план1=G, план2=R, план3=A (по n8 байт),
+  // порядок пикселей — по тайлам 32×32 (col,row из заголовка).
+  _blitPIII(raw, f) {
+    const { resX, bytesPP } = f;
+    if (bytesPP !== 4) { // 16bpp-планарность другая (2 плана u16) — пока raw
+      this._blit(f, raw.subarray(34));
+      return;
+    }
+    if (raw.length < 36) return;
+    const tileCnt = raw.readUInt16LE(34);
+    const hdrLen = 2 + tileCnt * 2;                // TILE_CNT+TILE_HDR*cnt
+    const pad = (hdrLen % 4) > 0 ? 4 - (hdrLen % 4) : 0;
+    const base = 34 + hdrLen + pad;                // старт RLE-потока
+    const rleEnd = Math.min(34 + f.frameSize, raw.length);
+    // RLE -> декомпрессированный буфер (dst с 0; в Java буфер — весь кадр,
+    // но пиксели рендерер читает с base, что эквивалентно)
+    const npx = tileCnt * 32 * 32 * bytesPP;       // план-сегмент = tileCnt*1024
+    const dst = Buffer.alloc(Math.max(npx, rleEnd - base));
+    const n = drleBytes(raw, base, rleEnd, dst);
+    if (n < tileCnt * 32 * 32 * bytesPP) return;   // неполный кадр — дроп
+    // план-сегменты (как n9..n12 в Java: base, +n8, +2*n8, +3*n8)
+    const n8 = tileCnt * 32 * 32;                  // размер одного плана
+    const pB = 0, pG = n8, pR = 2 * n8, pA = 3 * n8;
+    const px = this.fb.pix;
+    const fw = this.fb.width, fh = this.fb.height;
+    for (let t = 0; t < tileCnt; t++) {
+      const row = raw[36 + t * 2], col = raw[37 + t * 2]; // TileXY_PIII(row,col)
+      const tx = col * 32, ty = row * 32;
+      for (let j = 0; j < 32; j++) {
+        const y = ty + j;
+        if (y >= resX * 0 + fh) break;             // за нижним краем
+        for (let k = 0; k < 32; k++) {
+          const x = tx + k;
+          if (x >= fw) break;
+          const pi = t * 1024 + j * 32 + k;        // индекс в плане
+          const b = dst[pB + pi], g = dst[pG + pi], r = dst[pR + pi];
+          px[y * fw + x] = (r << 16) | (g << 8) | b;
+        }
+      }
+    }
+  }
+
   _blit(f, pixels) {
     const { resX, resY, bytesPP } = f;
     const w = Math.min(resX, this.fb.width), h = Math.min(resY, this.fb.height);
     if (w <= 0 || h <= 0) return;
     const px = this.fb.pix;
+    // Инвариант проекта (как у S2 IrmcFramebuffer): pix = 0x00RRGGBB.
+    // На LE-хосте это байты B,G,R,0 — ровно то, что ждёт fast-path vnc.js
+    // (noVNC blitImage) и png.encodePng. Прежний 0xFFBBGGRR давал перепутанные
+    // R/B в RFB и ломал /api/snapshot.
     if (bytesPP === 4 || bytesPP === 3) {
-      const off = bytesPP === 3 ? 1 : 0; // 4bpp: BGRA -> LE-порядок; 3bpp: RGB
+      const off = bytesPP === 3 ? 1 : 0; // 4bpp: BGRA-порядок; 3bpp: RGB
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
           const i = (y * resX + x);
           const j = i * (bytesPP === 3 ? 3 : 4) + off;
           const b = pixels[j] | 0, g = pixels[j + 1] | 0, r = pixels[j + 2] | 0;
-          px[y * w + x] = 0xff000000 | (b << 16) | (g << 8) | r;
+          px[y * w + x] = (r << 16) | (g << 8) | b;
         }
       }
     } else if (bytesPP === 2) {
@@ -352,14 +451,14 @@ export class IvtpClient {
         for (let x = 0; x < w; x++) {
           const v = pixels.readUInt16LE((y * resX + x) * 2);
           const r = (v & 0xf800) >>> 8, g = (v & 0x07e0) >>> 3, b = (v & 0x1f) << 3;
-          px[y * w + x] = 0xff000000 | (b << 16) | (g << 8) | r;
+          px[y * w + x] = (r << 16) | (g << 8) | b;
         }
       }
     } else if (bytesPP === 1) {
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
           const v = pixels[y * resX + x] | 0;
-          px[y * w + x] = 0xff000000 | (v << 16) | (v << 8) | v;
+          px[y * w + x] = (v << 16) | (v << 8) | v;
         }
       }
     }
@@ -400,12 +499,17 @@ export class IvtpClient {
     this.sendMouseAbs(this._mbtn & 7, this._mx || 0, this._my || 0, this._mwheel, w, h);
     if (this._mwheel) { this._mwheel = 0; } // колесо — импульс
   }
-  // HID-пакет по декомпиляту USBKeyboardRep/USBMouseRep: 49 байт (клава) или
-  // 47 (мышь ABS). pktSize в IVTP-заголовке = длина пакета - 8 (41/39).
-  // dataLen: клава 9, мышь 7 (см. Java putInt(n)); checksum: [19] = -(сумма
-  // байт [8..39] полного буфера).
+  // HID-пакет по декомпиляту USBKeyboardRep/USBMouseRep (put-последовательность):
+  // [0..7] IVTP-hdr; [8..15] «IUSB    »; [16]=1 major; [17]=0 minor;
+  // [18]=32 hdrSize; [19] checksum; [20..23] dataLen(клава 9 / мышь 7);
+  // [24]=0; [25] devType(0x30/0x31); [26] proto(0x10/0x20); [27]=0x80;
+  // [28]=2 devNum; [29] ifNum(клава 0 / мышь 1); [30..31]=0;
+  // [32..35] seq; [36..39]=0; [40] tailLen(клава 8 / мышь 6);
+  // [41..] report. pktSize = длина-8: клава 41 (буфер 49), мышь 39 (47).
+  // Прежняя версия писала seq@30/tailLen@38/report@39 — на 2 байта раньше
+  // эталона: BMC не видел отчёты → клава/мышь молчали.
   _sendHid(devType, proto, ifNum, javaDataLen, tailLen, report) {
-    const pkt = Buffer.alloc(8 + 34 + 7, 0); // 49 как в Java (с запасом)
+    const pkt = Buffer.alloc(41 + report.length, 0);
     ivtpHdr(IVTP.HID, pkt.length - 8, 0).copy(pkt, 0);
     pkt.write('IUSB    ', 8, 8, 'latin1');
     pkt[16] = 1; pkt[17] = 0; pkt[18] = 32; // major/minor/hdrSize
@@ -413,16 +517,14 @@ export class IvtpClient {
     pkt.writeInt32LE(javaDataLen, 20);
     pkt[24] = 0;
     pkt[25] = devType; pkt[26] = proto; pkt[27] = 0x80; pkt[28] = 2; pkt[29] = ifNum;
-    pkt.writeInt32LE(this._seq++, 30);
-    // [34..37] = 0; [38] = tailLen (клава 8, мышь 6)
-    pkt[38] = tailLen;
-    report.copy(pkt, 39);
+    pkt.writeInt32LE(this._seq++, 32);
+    pkt[40] = tailLen;
+    report.copy(pkt, 41);
     let sum = 0;
     for (let i = 8; i <= 39; i++) sum = (sum + pkt[i]) & 0xff;
     pkt[19] = (-sum) & 0xff;
-    const out = pkt.subarray(0, 39 + report.length);
-    this.sock.write(out);
-    return out;
+    this.sock.write(pkt);
+    return pkt;
   }
   sendKeyReport(usbReport8) {
     // usbReport8: [0]=mods, [1]=0, [2..7]=ключи (стандартный USB HID-отчёт)
