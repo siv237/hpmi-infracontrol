@@ -76,7 +76,7 @@ const EXPECTED_FUNCTIONS = [
   // users
   'loadUsers','renderUserBox','renderUsers','openUserDlg','delUser','applyPerms','renderProfile',
   // tree-controls
-  'openDlg',
+  'openDlg','dlgCheckHtml',
   // console
   'showMsg','conOf','curCon','curToken','showConsole','startSnapshotLoop','connectConsole','disconnectConsole','sendKeys','tapKey',
   // layout

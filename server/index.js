@@ -12,13 +12,15 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { IrmcClient, testIrmc } from './irmc.js';
+import { IvtpClient } from './console-ivtp.js';
 import * as ipmi from './ipmi.js';
 import * as db from './db.js';
-import { checkChannels } from './channels.js';
+import { checkChannels, ping as pingChannel, tcpPort } from './channels.js';
+import { matchBmcModule } from './bmc-registry.js';
 import { listServers, saveServer, deleteServer, getServer, updateServer } from './store.js';
 import { listUsers, saveUser, updateUser, deleteUser, verifyPasswordByLogin, updatePassword, migrateLegacy } from './users-store.js';
 import { decrypt as decryptLegacyBox, getKey } from './crypto-box.js';
-import { discover, getSession, inventory, parseInventory } from './discover.js';
+import { discover, getSession, inventory, parseInventory, webAuthDiag } from './discover.js';
 import { probe } from './probe.js';
 import { attachVnc } from './vnc.js';
 import { encodePng, saveScreenshot } from './png.js';
@@ -73,11 +75,34 @@ function createSession(name, host) {
     creds: null,               // последние использованные креды (в памяти, не персистится)
     reconnectTimer: null,
     _retryN: 0,
-    fb(rects) { const c = sess.cli; return c ? { width: c.fb.width, height: c.fb.height, pix: rects ? c.fb.getRGBFor(rects) : c.fb.getRGB() } : { width: 0, height: 0, pix: new Uint32Array(0) }; },
+    fb(rects) {
+      const c = sess.cli;
+      if (!c) return { width: 0, height: 0, pix: new Uint32Array(0) };
+      // IVTP (S4): pix уже RGBA-Uint32Array — отдаём напрямую.
+      if (sess.engine === 'ivtp') return { width: c.fb.width, height: c.fb.height, pix: c.fb.pix };
+      return { width: c.fb.width, height: c.fb.height, pix: rects ? c.fb.getRGBFor(rects) : c.fb.getRGB() };
+    },
     fbSize() { const c = sess.cli; return c ? { width: c.fb.width, height: c.fb.height } : { width: 0, height: 0 }; },
-    key: (k, d) => sess.cli && sess.cli.key(k, d),
-    mouseMove: (x, y) => sess.cli && sess.cli.mouseMove(x, y),
-    buttonState: (x, y, m) => sess.cli && sess.cli.buttonState(x, y, m),
+    key: (k, d) => {
+      const c = sess.cli; if (!c) return;
+      if (sess.engine === 'ivtp') return; // HID-отчёты собираются в ivtpKey (vnc.js -> keysym)
+      c.key(k, d);
+    },
+    // IVTP: сборка USB-HID отчётов из потока событий (см. ivtpKey/ivtpMouse)
+    ivtpKey(hid, down) {
+      const c = sess.cli; if (!c || sess.engine !== 'ivtp') return;
+      c.keyEvent(hid, down);
+    },
+    mouseMove: (x, y) => {
+      const c = sess.cli; if (!c) return;
+      if (sess.engine === 'ivtp') { c.mouseAbs(x, y); return; }
+      c.mouseMove(x, y);
+    },
+    buttonState: (x, y, m) => {
+      const c = sess.cli; if (!c) return;
+      if (sess.engine === 'ivtp') { c.mouseButtons(x, y, m); return; }
+      c.buttonState(x, y, m);
+    },
     subscribe(cb) { sess.listeners.add(cb); },
     unsubscribe(cb) { sess.listeners.delete(cb); },
     onFull(cb) { sess.fullCbs.add(cb); },
@@ -116,6 +141,35 @@ async function startSession(sess, host, user, pass, port, secure) {
   // креды держим в памяти сессии — авто-реконнект поднимает то же подключение
   sess.creds = { host, user, pass, port, secure };
   const cfg = await cachedSession({ host, username: user, password: pass, port, secure });
+  // S4 (AMI/IVTP): getSession вернул kvmtoken+webcookie — консоль другим
+  // движком (CONNECT-туннель на web-порт), не Mahogany-AVR.
+  if (cfg.s4Sid) {
+    const cli = new IvtpClient({ ...cfg, host, username: user }, {
+      onStatus: (s) => {
+        sess.status.push(s);
+        if (process.env.IRMC_DEBUG === '1') console.log('[ivtp]', s);
+        if (s === 'session:valid') { sess.state = 'live'; sess._retryN = 0; }
+        if (s.startsWith('vesa:')) {
+          const m = /^vesa:(\d+)x(\d+)@(\d+)/.exec(s);
+          if (m) { sess.width = +m[1]; sess.height = +m[2]; }
+        }
+      },
+      onError: (e) => { sess.error = e; sess.state = 'error'; if (process.env.IRMC_DEBUG === '1') console.log('[ivtp] ERR:', e); scheduleReconnect(sess); },
+      onExit: () => { sess.state = 'closed'; if (process.env.IRMC_DEBUG === '1') console.log('[ivtp] exit'); scheduleReconnect(sess); },
+      onFrame: (fb) => {
+        sess.width = fb.width; sess.height = fb.height;
+        sess.lastFrameAt = Date.now();
+        for (const cb of sess.listeners) cb(fb, null);
+      },
+    });
+    sess.cli = cli;
+    sess.engine = 'ivtp';
+    await cli.start();
+    sess._keyframe = setInterval(() => {
+      try { sess.cli?.invalidateFull(); } catch {}
+    }, 10000);
+    return sess;
+  }
   const cli = new IrmcClient(cfg, {
     onStatus: (s) => {
       sess.status.push(s);
@@ -422,6 +476,74 @@ const server = http.createServer(async (req, res) => {
     s.manualClose = true; // ручное отключение — авто-реконнект не нужен
     closeSession(s);
     return json(res, 200, { ok: true });
+  }
+
+  // БЫСТРАЯ проверка при добавлении сервера (модал «Добавить»): триада
+  // доступности — ping (ICMP), вебка (TCP к web-порту + веб-диагностика),
+  // IPMI (mc info + lan print — лёгкие, без сессий; заодно проверяют креды
+  // и дают «что за сервер»). Инвентарь/SDR/SEL НЕ собираем — быстрая.
+  // Реальный случай: IPMI принимает креды, а веб — нет (ранние iRMC:
+  // Basic/форма вместо Digest, или вебка виснет) — webAuthDiag ставит
+  // диагноз: схема авторизации + приняты ли логин/пароль.
+  if (url.pathname === '/api/check' && req.method === 'POST') {
+    const body = await readJson(req, res);
+    if (!body) return;
+    // Проверка уже сохранённого сервера (serverId) — креды с диска; либо
+    // инлайн-конфиг из модалки «Добавить» (до сохранения).
+    let cfg = { ...body };
+    if (body.serverId) {
+      try { cfg = await getServer(body.serverId); } catch { return json(res, 400, { ok: false, error: 'server not found' }); }
+      if (!cfg) return json(res, 404, { ok: false, error: 'server not found' });
+    }
+    const host = String(cfg.host || '').trim();
+    if (!host) return json(res, 400, { ok: false, error: 'host обязателен' });
+    const port = Number(cfg.port || 80) || 80;
+    const secure = !!cfg.secure;
+    const [p, w, ipmiQ, webD] = await Promise.all([
+      pingChannel(host, 3000),
+      tcpPort(host, port, 4000),
+      (cfg.username !== undefined && cfg.username !== ''
+        ? ipmi.quickCheck({ host, username: cfg.username, password: cfg.password || '' })
+        : Promise.resolve(null)),
+      (cfg.username !== undefined && cfg.username !== ''
+        ? webAuthDiag(secure, host, port, cfg.username, cfg.password || '')
+        : Promise.resolve(null)),
+    ]);
+    return json(res, 200, {
+      ok: true, host, port, secure,
+      ping: { ok: p.ok, ms: p.ms, error: p.ok ? undefined : (p.error || null) },
+      webPort: { ok: w.ok, ms: w.ms, error: w.ok ? undefined : (w.error || null) },
+      ipmi: ipmiQ ? {
+        ok: ipmiQ.ipmi.ok, auth: ipmiQ.ipmi.auth, error: ipmiQ.ipmi.error,
+        ms: ipmiQ.ms,
+        bmcFirmware: ipmiQ.ipmi.bmcFirmware, ipmiVersion: ipmiQ.ipmi.ipmiVersion,
+        manufacturer: ipmiQ.ipmi.manufacturer,
+        lan: ipmiQ.lan,
+      } : null,
+      web: webD ? {
+        ok: webD.ok, scheme: webD.scheme, realm: webD.realm, title: webD.title,
+        status: webD.status, verdict: webD.verdict,
+      } : null,
+      // Пробник совместимости (плагинный реестр bmc-registry.js): сигнатура
+      // BMC + подобранный модуль поддержки с честными caps/quirks.
+      compat: (() => {
+        const sig = {
+          realm: webD?.realm || null,
+          title: webD?.title || null,
+          manufacturer: ipmiQ?.ipmi.manufacturer || null,
+          bmcFirmware: ipmiQ?.ipmi.bmcFirmware || null,
+          webScheme: webD?.scheme || null,
+          ipmiOk: !!ipmiQ?.ipmi.ok,
+        };
+        const { module, matched } = matchBmcModule(sig);
+        return {
+          signature: sig,
+          moduleId: module.id, moduleTitle: module.title,
+          matched,
+          caps: module.caps, quirks: module.quirks,
+        };
+      })(),
+    });
   }
 
   if (url.pathname === '/api/info' && req.method === 'POST') {

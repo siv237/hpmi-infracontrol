@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jnlp spec="1.0+" codebase="http://irmcdgk51srv042.dgk.ru/" >
+<information>
+  <title>iRMC S4 Advanced Video Redirection Viewer</title>
+  <vendor>Fujitsu Technology Solutions</vendor>
+  <description kind="one-line">Java Viewer for Advanced Video Redirection (AVR) of PRIMERGY servers.</description>
+  <description kind="tooltip">Java Viewer for Advanced Video Redirection (AVR) of PRIMERGY servers.</description>
+  <description kind="short">
+    JViewer enables a user to view the video display of managed server via Advanced Video redirection.  
+    It also enables the user to redirect his local keyboard, mouse for managing the server remotely.
+  </description>
+  <icon href="rv_logo.gif"/>
+  <icon kind="splash" href="rv_splash.gif"/>
+</information>
+<security>
+  <all-permissions/>
+</security>
+<resources>
+  <j2se version="1.5+"/>
+  <jar href="/Java/release/JViewer.jar"  />
+</resources>
+<resources>
+  <j2se version="1.5+"/>
+  <jar href="/Java/release/JViewer-SOC.jar"  />
+</resources>
+<resources>
+  <j2se version="1.5+"/>
+  <jar href="/Java/release/JViewer-AVIStream.jar"  />
+</resources>
+<resources os="Windows" arch="x86">
+  <j2se version="1.5+"/>
+  <nativelib href="/Java/release/Win32.jar" />
+</resources>
+<resources os="Windows" arch="amd64">
+  <j2se version="1.5+"/>
+  <nativelib href="/Java/release/Win64.jar" />
+</resources>
+<resources os="Linux" arch="x86">
+  <j2se version="1.5+"/>
+  <nativelib href="/Java/release/Linux_x86_32.jar" />
+</resources>
+<resources os="Linux" arch="i386">
+  <j2se version="1.5+"/>
+  <nativelib href="/Java/release/Linux_x86_32.jar" />
+</resources>
+<resources os="Linux" arch="x86_64">
+  <j2se version="1.5+"/>
+  <nativelib href="/Java/release/Linux_x86_64.jar" />
+</resources>
+<resources os="Linux" arch="amd64">
+  <j2se version="1.5+"/>
+  <nativelib href="/Java/release/Linux_x86_64.jar" />
+</resources>
+<resources os="Mac OS X" arch="i386">
+  <j2se version="1.5+"/>
+  <nativelib href="/Java/release/Mac32.jar" />
+</resources>
+<resources os="Mac OS X" arch="x86_64">
+  <j2se version="1.5+"/>
+  <nativelib href="/Java/release/Mac64.jar" />
+</resources>
+<application-desc>
+<argument>-apptype</argument>
+<argument>JViewer</argument>
+<argument>-hostname</argument>
+<argument>irmcdgk51srv042.dgk.ru</argument>
+<argument>-kvmtoken</argument>
+<argument>cNksIJxvdlepMakC</argument>
+<argument>-kvmsecure</argument>
+<argument>0</argument>
+<argument>-kvmport</argument>
+<argument>80</argument>
+<argument>-vmsecure</argument>
+<argument>0</argument>
+<argument>-cdstate</argument>
+<argument>1</argument>
+<argument>-fdstate</argument>
+<argument>1</argument>
+<argument>-hdstate</argument>
+<argument>1</argument>
+<argument>-cdnum</argument>
+<argument>2</argument>
+<argument>-fdnum</argument>
+<argument>0</argument>
+<argument>-hdnum</argument>
+<argument>1</argument>
+<argument>-extendedpriv</argument>
+<argument>327939</argument>
+<argument>-localization</argument>
+<argument>EN</argument>
+<argument>-keyboardlayout</argument>
+<argument>AD</argument>
+<argument>-websecureport</argument>
+<argument>443</argument>
+<argument>-singleportenabled</argument>
+<argument>1</argument>
+<argument>-webcookie</argument>
+<argument>7Dv0L63eTwCygh75</argument>
+<argument>-oemfeatures</argument>
+<argument>7</argument>
+<argument>-oemtitle</argument>
+<argument>administrator@iRMCdgk51srv042</argument>
+</application-desc>
+</jnlp>
