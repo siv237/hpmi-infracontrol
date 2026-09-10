@@ -698,3 +698,17 @@ Java↔M2 и проводной M2↔iRMC протоколы, JSON-эмуляц�
 - `server/index.js`: новый роут `/css|js/*` — отдача статических модулей (mimeFor, no-store).
 - Тест-стек: `node:test` (unit/интеграция) + e2e-смок `puppeteer-core` (HTML/модулей/инициализации). `npm test` (unit), `npm run test:e2e` (требует `./start.sh`+CHROME, сам сервер не поднимает). Best practices — `knowledge/testing.md`.
 - Unit-тесты защищают разрез: нет inline монолита, модули на месте, синтаксис связки, набор функций без потерь/дублей имён, `$("id")` в HTML, роут сервера.
+
+## [2026-09-08] project | Рабочее окружение форка: npm через зеркало, фиксы переносимости
+- Поднято окружение на машине форка `yuristwood/hpmi-infracontrol` (git, gh,
+  Node 22.22, npm, ipmitool, chromium). Зависимости установлены через
+  `registry.npmmirror.com` — registry.npmjs.org из этой сети нестабилен
+  (npm виснет на half-open сокетах, ERR_SOCKET_TIMEOUT). Подробности и обход —
+  новая страница `knowledge/dev-env.md`.
+- Замечен и починен в рабочей копии (не закоммичено — по правилам AGENTS.md):
+  захардкоженный путь автора в `test/web-split.test.js` (тест падал на любой
+  чужой машине) и `npm test` = `node --test test/` (не работает на Node 22 →
+  `test/*.test.js`).
+- `npm test`: 23 теста — 22 pass, 1 skip (e2e ждёт сервер), 0 fail.
+  `better-sqlite3` проверен на нативном пребилде.
+

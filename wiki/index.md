@@ -29,6 +29,9 @@ LLM Wiki проекта iRMC Viewer (этап 1). Страницы в `wiki/`, �
   (RMCP+/UDP 623/664): чтение темп./кулеров, интервальный опрос, не трогает KVM.
 - [knowledge/testing.md](knowledge/testing.md) — стек и best practices
   тестирования фронтенда (node:test + puppeteer e2e-смок), правила ведения.
+- [knowledge/dev-env.md](knowledge/dev-env.md) — рабочее окружение форка
+  (Node 22, gh): нестабильный npmjs и установка через npmmirror, фикс
+  переносимости тестов.
 
 ## Баги
 
