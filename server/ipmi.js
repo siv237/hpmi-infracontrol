@@ -236,3 +236,56 @@ export async function readAll(opts) {
     net: net.net || {},
   };
 }
+
+// БЫСТРАЯ проверка при добавлении сервера (модал «Добавить сервер»):
+// mc info + lan print — две лёгкие команды без сессий и без SDR/SEL/FRU.
+// Проверяет креды (wrong password → ipmitool ругается в stderr) и заодно
+// даёт «что за сервер»: прошивка BMC, IPMI-версия, производитель, IP/MAC.
+// ВАЖНО: в error никогда не попадает командная строка (exec включает
+// пароль в e.message!) — только наш безопасный текст.
+export async function quickCheck(opts) {
+  const { host, username, password } = opts;
+  const t0 = Date.now();
+  const base = ['-I', 'lanplus', '-H', host, '-U', username, '-P', password || ''];
+  const env = { ...process.env, IPMITOOL_PASS: password || '' };
+  const runOne = (sub) =>
+    exec('ipmitool', [...base, ...sub], { env, timeout: 8000, maxBuffer: 16 * 1024 })
+      .then((r) => ({ ok: true, out: r.stdout || '' }))
+      .catch((e) => {
+        // не включаем e.message: там полная командная строка с паролем
+        const stderr = String((e && e.stderr) || '').slice(0, 200);
+        const killed = (e && (e.killed || e.signal)) || /timed? ?out/i.test(stderr);
+        return { ok: false, err: killed ? 'timeout' : (stderr || 'ipmitool failed') };
+      });
+  const [mc, lan] = await Promise.all([runOne(['mc', 'info']), runOne(['lan', 'print'])]);
+  const ms = Date.now() - t0;
+  const mcO = mc.ok ? parseMcInfo(mc.out) : {};
+  const lanReal = lan.ok ? parseLan(lan.out) : {};
+  // Диагноз: обе команды не прошли. Если хост вообще не отвечает RMCP+
+  // (timeout/unreachable) — креды неизвестны; если отвечает ошибкой кредов —
+  // адрес верный, логин/пароль нет.
+  let auth = null;
+  if (mc.ok || lan.ok) auth = true;
+  else {
+    const both = ((mc.err || '') + ' ' + (lan.err || '')).toLowerCase();
+    const credErr = /wrong password|invalid password|unauthorized|name or password|password incorrect|sess processing|cipher/i.test(both);
+    const netErr = /timeout|timed out|unreachable|no route|host not found|connection|get .* response|ipmitool failed/.test(both);
+    auth = credErr ? false : (netErr ? null : false);
+  }
+  return {
+    ms,
+    ipmi: {
+      ok: !!(mc.ok || lan.ok),
+      auth,
+      error: (!mc.ok && !lan.ok) ? (mc.err || lan.err) : null,
+      bmcFirmware: mcO.firmware_revision || '',
+      ipmiVersion: mcO.ipmi_version || '',
+      manufacturer: mcO.manufacturer_name || '',
+    },
+    lan: lan.ok ? {
+      ip: lanReal.ip_address || '',
+      mac: (lanReal.mac_address || '').toUpperCase(),
+      ipSource: lanReal.ip_address_source || '',
+    } : null,
+  };
+}

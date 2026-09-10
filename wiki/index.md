@@ -41,6 +41,14 @@ LLM Wiki проекта iRMC Viewer (этап 1). Страницы в `wiki/`, �
 - [knowledge/tree-groups.md](knowledge/tree-groups.md) — редактор дерева
   серверов (п.8): group/root у серверов, ui.json (roots/groups/паспорт),
   контекстное меню, drag&drop, вкладка «Группы».
+- [knowledge/bmc-modules.md](knowledge/bmc-modules.md) — модульный стек BMC:
+  реестр-плагины (S2/S4/S3/generic), сигнатуры, инструкция добавления
+  модулей, быстрая проверка /api/check, учёт проверенного.
+- [knowledge/bmc-jar-download.md](knowledge/bmc-jar-download.md) — как
+  скачать JAR-вьювер с BMC (S2/S4 примеры), декомпиляция, что искать.
+- [knowledge/irmc-s4-ivtp.md](knowledge/irmc-s4-ivtp.md) — iRMC S4:
+  веб-вход (Digest за формой, sid), KVM-консоль IVTP/AMI (CONNECT-
+  туннель 443, kvmtoken, кадры RLE, HID-ввод), интеграция, грабли.
 - [knowledge/server-deploy.md](knowledge/server-deploy.md) — ⚙ служебная
   (вне git): спецификация сервера деплоя (OS, сеть, репозитории, установленный
 - [knowledge/hp-lo100i-m2.md](knowledge/hp-lo100i-m2.md) — HP ProLiant

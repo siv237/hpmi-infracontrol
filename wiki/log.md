@@ -897,3 +897,91 @@ better-sqlite3), systemd через ./start.sh, nginx TLS-прокси (само
 - index.html: vim-строка перенесена в комментарий ПОСЛЕ <!doctype html>
   (была текстом до doctype → Quirks mode + мусор в углу страницы).
 - npm test 26/26 (web-split: +groups.js, +новые функции).
+
+## [2026-09-10] project | Быстрая проверка при добавлении (триада + креды) + модульный стек BMC
+- POST /api/check ({serverId} | инлайн): параллельно ping (ICMP), web
+  (TCP), IPMI quickCheck (mc info + lan print; креды, BMC/производитель,
+  IP/MAC) и webAuthDiag (схема авторизации: Digest/Basic/Form/
+  форма-триггер S4 + принимаются ли логин/пароль). Кнопка «Проверить» в
+  модале сервера + панель результатов (dc-box CSS).
+- ipmi.quickCheck: БЕЗ ПАРОЛЯ в error (exec кладёт командную строку с
+  -P в e.message — маскируем), классификация auth: true/false/NULL
+  (NULL = хост не отвечает RMCP+).
+- webAuthDiag: жёсткий общий таймаут 12с (http.get на мёртвом хосте
+  висит до kernel TCP-таймаута — минуты), 302-редиректы до 3 прыжков,
+  S4-детект: «/» 302→/login→200 форма APPLY=99 → POST-триггер → 401
+  Digest → digestGet-проверка кредов. digestGet: 302-follow + S4-триггер.
+- ДИАГНОЗ dgk51srv042 (владелец: «не авторизуется в вебке при живом
+  IPMI»): это iRMC S4 Fw 7.69F. Креды ВЕРНЫ (Digest за формой принят,
+  IPMI auth=true). Но Digest-вход НЕ создаёт веб-сессию: контент за
+  «Login required» — реальный вход у S4 формой (POST creds), не
+  реализован — задача (ROADMAP п.15). IPMI-инвентарь полностью жив
+  (36 сенсоров, SEL 100, lan print).
+- Регресс-проверка digestGet на S2: dgk10str011/dgk24srv040 — 200,
+  без login-required; dgk51srv041 виснет — ИЗВЕСТНЫЙ дефект S2
+  (Digest-логин извне виснет, одноразовый nonce — wiki irmc-protocol).
+- Модульный стек BMC (по указанию владельца): server/bmc-registry.js —
+  реестр-плагины (fujitsu-irmc-s2 100, fujitsu-irmc-s4 95,
+  fujitsu-irmc-s3plus 90, generic-ipmi 10): match по сигнатуре
+  (realm/title/manufacturer), честные caps (CAP.*), quirks; пробник
+  совместимости в /api/check (compat.moduleId/matched/caps/quirks) и в
+  панели проверки. Инструкция добавления модулей + учёт —
+  wiki/knowledge/bmc-modules.md; ROADMAP п.15 (S4 form-вход — TODO).
+- Грабли: execFile НЕ парсит пробелы — подкоманды массивом
+  (['mc','info']), иначе «Invalid command».
+- npm test 29/29 (+1 skip e2e) — новый test/bmc-registry.test.js:
+  матчи сигнатур, приоритеты, quickCheck без утечки пароля.
+
+## [2026-09-10] ingest | iRMC S4: веб-вход взломан, JAR-вьювер скачан, KVM-стек определён
+- S4-вход (Fw 7.69F): POST /login APPLY=99 -> 401 Digest (nonce
+  ОДНОРАЗОВЫЙ — повторный POST с тем же nonce отвергается, поэтому
+  curl --digest не работает) -> единственный Digest-POST c nc=00000001
+  -> 302 на /systeminfo?...&sid=<sid> — sid и есть веб-сессия S4.
+  Дальше все страницы/JNLP ходят с sid. Реализовано: s4Login() в
+  discover.js, getSession() автоматически падает в S4-путь, если S2-стр.
+  выдала «Login required» (фикс «no avr.jnlp link in page»).
+- avr.jnlp (S4) отдаётся с sid: аргументы -kvmtoken, -kvmport 80,
+  -kvmsecure 0, -webcookie, -singleportenabled 1, -oemfeatures...
+  Протокол НЕ Mahogany: это AMI JViewer (com.ami.*) с IVTP-пакетами и
+  HTTP CONNECT-туннелем на web-порт (SinglePortKVM:
+  «CONNECT<host>:<port> HTTP/1.1 cookie <webSessionToken>», затем
+  «JVIEWER <service> cookie <token>», внутри KVMClient IVTP).
+- Скачано в raw/ (по указанию владельца): JViewer_S4.jar (626К, 284
+  класса), JViewer-SOC_S4.jar, JViewer-AVIStream_S4.jar,
+  avr_s4.jnlp.sample — с живого 042 через /Java/release/. Декомпи-
+  лировано CFR -> /tmp/kilo/s4all (вне репо).
+- Методика скачивания JAR с любых BMC (шаги, что искать в декомпиле,
+  примеры S2/S4) — новая wiki/knowledge/bmc-jar-download.md.
+- KVM-консоль S4 — отдельная задача: нужен IVTP-движок (не AVR).
+  Аргументы JNLP сохранены; kvmtoken/webcookie одноразовые — брать
+  свежие при каждом подключении (как httpdata у S2).
+
+## [2026-09-10] project | S4-консоль (IVTP) полностью заработала + данные интернет-агента
+- console-ivtp.js (IVTP/AMI): CONNECT-туннель цель host:443 (websecureport
+  из JNLP, сам сокет на 80!), рукопожатие [21 webcookie]+[18 kvmtoken
+  373б]+[6], после [19] обязательно [11 GET_FULL_SCREEN] (иначе BMC
+  молчит), кадры [25] фрагментами (первый fragNum&0x7fff==0, финал
+  &0x8000; пропущенное начало — дроп), SOCFrameHdr 34б (bytesPP на
+  offset 22!), кодеки: 0/10 raw, 8 = DrleBuffer-байтовый RLE (RCODE
+  0x55 cnt+1 repeat / TCODE 0xAA 3x), 6 = пары u16/u32. HID-ввод:
+  [1,41] клава (dataLen 9, [38]=8, отчёт 6б, checksum [19]=-(сумма
+  8..39)), мышь ABS [1,39] (dataLen 7, [38]=6, btn+x16+y16+wheel).
+  Мусорные кадры (resX<300) — отброс (JViewer-логика).
+- Интеграция: startSession S4-ветка (cfg.s4Sid от getSession), sess.
+  engine='ivtp', fb()/key/mouseMove/buttonState разветвлены, ivtp key/
+  mouse через HID-сборщик. vnc.js (RFB мост, noVNC) — без изменений.
+- Проверено E2E на живом 042: /api/connect {live 1024x768} -> WS RFB
+  ServerInit 1024x768 -> кадры идут (видео 25fps, скриншот-проба с
+  текстовой консолью). ГРАБЛИ: одна KVM-сессия на BMC — конкурирующее
+  подключение (в т.ч. моё тестовое) вытесняет прежнее ([ivtp] exit ->
+  reconnect); kvmtoken/webcookie одноразовые — каждая сессия берёт
+  свежие через s4Login. Первый кадр после [11] — статичный экран может
+  молчать: keyframe-интервал (10с [11]) подтягивает.
+- raw/InfraControl_iRMC_S4_JViewer_Research.md (интернет-агент):
+  подтверждён наш реверс (одноразовые токены JNLP, single-port,
+  Advanced Pack лицензия обязательна для KVM); HTML5-вьюер только с
+  прошивки 8.05F (у 042 7.69F — Java-путь единственный); SCCI/Redfish
+  VirtualMedia (NFS/CIFS) — готовый путь для будущей вкладки ISO;
+  SCCI ConfigSpace OE=1633 (Java/HTML5 режим AVR). Синтез —
+  wiki/knowledge/irmc-s4-ivtp.md.
+- npm test 30/30.
