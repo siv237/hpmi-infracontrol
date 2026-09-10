@@ -35,11 +35,18 @@ LLM Wiki проекта iRMC Viewer (этап 1). Страницы в `wiki/`, �
 - [knowledge/dev-env.md](knowledge/dev-env.md) — рабочее окружение форка
   (Node 22, gh): нестабильный npmjs и установка через npmmirror, фикс
   переносимости тестов.
+- [knowledge/hp-lo100-kvm.md](knowledge/hp-lo100-kvm.md) — HP LO100 (DL180
+  G6): тот же Mahogany-протокол, APPLET M2.JAR на kvms.html, паддинги
+  16/20/128, KVM-порт 80, httpdata-токен вместо пароля.
 - [knowledge/tree-groups.md](knowledge/tree-groups.md) — редактор дерева
   серверов (п.8): group/root у серверов, ui.json (roots/groups/паспорт),
   контекстное меню, drag&drop, вкладка «Группы».
 - [knowledge/server-deploy.md](knowledge/server-deploy.md) — ⚙ служебная
   (вне git): спецификация сервера деплоя (OS, сеть, репозитории, установленный
+- [knowledge/hp-lo100i-m2.md](knowledge/hp-lo100i-m2.md) — HP ProLiant
+  DL180 G6 / Lights-Out 100i по raw/M2.JAR: Mahogany-протокол, отличия от
+  iRMC (паддинги 16/20/128, без digest), движок LIBM2, план профиля BMC.
+
   софт, что ставит deploy.sh).
 
 ## Баги
