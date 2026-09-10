@@ -69,14 +69,19 @@ digest-сигнатуры `0x13131313` в M2.JAR нет. Отличия толь
 - StorageMsgRequest (дискавери M2, id=0) тоже в M2.JAR — формат как в
   irmc-storage.md.
 
-## План модуля HP (server/hp.js)
+## Модуль HP (server/hp.js) — РЕАЛИЗОВАН
 
-1. digest GET /kvms.html (с ретраями и паузами ≥2 c) → парс APPLET params.
-2. IrmcClient с конфигом: `pads: [16,20,128]`, host, port=NonSecure_KVMPort,
-   password=httpdata-токен; сигнал embedded 0x5A5A5A5A, привилегии 31.
-3. Дальше — существующий декодер и VNC-мост без изменений (тот же протокол).
-4. Метрики (сенсоры/SEL/chassis) — взять из HTML-страниц BMC или IPMI-over-LAN
-   (server/ipmi.js уже умеет RMCP+; у LO100 ipmitool работает по стандарту).
+`server/hp.js`: `fetchKvmApplet(cfg)` (digest GET /kvms.html с ретраями и
+паузами ≥2 c → парс APPLET-параметров) + `openHpConsole(cfg, events)` —
+`IrmcClient` с `pad: {user:16, pass:20, full:128}`, `port=NonSecure_KVMPort`,
+`httpdata=токен из kvms.html`. Интеграция в `server/index.js` `startSession`:
+если `cachedSession` падает «no avr.jnlp link in page» — пробуем HP-ветку.
+Декодер и VNC-мост не менялись (тот же протокол).
+
+**Подтверждено на живом 192.168.6.51 (DL180 G6, fw 4.22):** `/api/connect`
+даёт `state=live, 1024×768`, снимок `/api/snapshot` отдаёт реальный кадр
+(PNG ~11.5 КБ). Расшифровка видео, курсор и клавиатура — тем же механизмом,
+что iRMC (см. irmc-protocol.md).
 
 ## Связанные страницы
 

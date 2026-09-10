@@ -985,3 +985,19 @@ better-sqlite3), systemd через ./start.sh, nginx TLS-прокси (само
   SCCI ConfigSpace OE=1633 (Java/HTML5 режим AVR). Синтез —
   wiki/knowledge/irmc-s4-ivtp.md.
 - npm test 30/30.
+
+## [2026-09-10] project | HP LO100i: модуль KVM server/hp.js — консоль работает
+- `server/hp.js`: `fetchKvmApplet(cfg)` (digest GET /kvms.html, ретраи с паузой
+  ≥2 c — BMC рвёт ECONNRESET) + `openHpConsole(cfg, events)` → `IrmcClient` с
+  `pad:{user:16,pass:20,full:128}`, `port=NonSecure_KVMPort`, `httpdata`=токен
+  из kvms.html (не пароль).
+- `server/irmc.js` `wire()`: паддинги полей сделаны настраиваемыми через
+  `opts.pad` (iRMC по умолчанию 48/48/228, HP 16/20/128) — поведение iRMC
+  не изменилось.
+- `server/index.js` `startSession`: если `cachedSession` падает «no avr.jnlp
+  link in page» — пробуем HP-ветку (openHpConsole); события консоли вынесены
+  в общий объект.
+- Подтверждено на живом 192.168.6.51 (DL180 G6, fw 4.22): /api/connect →
+  state=live 1024×768, /api/snapshot отдаёт кадр (PNG ~11.5 КБ).
+- Реестр bmc-registry.js: hp-lo100 получает CAP.KVM_AVR. npm test 30/30.
+

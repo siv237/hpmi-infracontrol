@@ -112,9 +112,13 @@ export class IrmcClient {
   wire(sig, user, pass, pwdFull, key) {
     const pad = (s, n) => { const b = Buffer.alloc(n); Buffer.from(String(s ?? ''), 'latin1').copy(b); return b; };
     const u32 = (v) => { const x = Buffer.alloc(4); x.writeUInt32LE(v >>> 0); return x; };
-    const username = pad(user, 48);
-    const password = pad(pass, 48);
-    const passwordFull = pad(pwdFull, 228);
+    // Паддинги полей зависят от BMC: iRMC — 48/48/228, HP LO100 — 16/20/128
+    // (см. CConn.init в M2.JAR / avr_irmc_s2.jar, wiki/knowledge/hp-lo100-kvm.md).
+    const P = this.opts.pad || {};
+    const nUser = P.user || 48, nPass = P.pass || 48, nFull = P.full || 228;
+    const username = pad(user, nUser);
+    const password = pad(pass, nPass);
+    const passwordFull = pad(pwdFull, nFull);
     const kk = Buffer.from(String(key ?? ''), 'latin1');
     const parts = [
       u32(sig),

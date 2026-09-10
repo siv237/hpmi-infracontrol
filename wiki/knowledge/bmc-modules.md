@@ -63,6 +63,7 @@
 | fujitsu-irmc-s2 | iRMC S2 (ServerView): Digest 401 на «/», HTTP:80 (443 вешает), KVM AVR, ISO M2 | ✅ работает | dgk10str011, dgk24srv040 (041: Digest-вход извне виснет — известный дефект S2) |
 | fujitsu-irmc-s4 | iRMC S4 (Fw 7.x): 302→/login, Digest за формой-триггером; веб-сессии Digest НЕ даёт | ✅ опрос IPMI + проверка кредов; ⚠ веб-инвентарь не собирается (нужен form-вход — задача) | dgk51srv042 (Fw 7.69F) |
 | fujitsu-irmc-s3plus | iRMC S3/S3-2: 302→login, Digest обычно стабилен | 🟡 предполагается (не проверялся на живом) | — |
+| hp-lo100 | HP LO100/LO100i (DL180 G6 fw 4.22): Digest HTTP:80, IPMI 2.0; KVM Mahogany (M2.JAR) — модуль server/hp.js | ✅ KVM работает (live 192.168.6.51, 1024×768, кадр снимается); 🤔 ISO (LIBM2) — проверить | 192.168.6.51 (DL180 G6) |
 | generic-ipmi | любой IPMI 2.0 без распознанного веба | ✅ fallback | — |
 
 ## Сигнатуры реальных железок (для match)

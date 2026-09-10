@@ -19,6 +19,18 @@ test('bmc-registry: S2/S4/S3/generic матчатся по сигнатуре', 
   const s3 = matchBmcModule({ realm: 'iRMC S3-2 DGK', title: null, ipmiOk: true });
   assert.equal(s3.module.id, 'fujitsu-irmc-s3plus');
 
+  // HP LO100i (реальная сигнатура DL180 G6, fw 4.22): производитель HP,
+  // веб Digest. KVM подключён (server/hp.js проверен на живом) — kvm-avr есть.
+  const hp = matchBmcModule({
+    realm: '192.168.6.51', title: 'BMC HTTP Server',
+    manufacturer: 'Hewlett-Packard', bmcFirmware: '4.22', ipmiOk: true,
+  });
+  assert.equal(hp.module.id, 'hp-lo100');
+  assert.ok(hp.matched);
+  assert.ok(hp.module.caps.includes(CAP.IPMI_LAN));
+  assert.ok(hp.module.caps.includes(CAP.WEB_DIGEST));
+  assert.ok(hp.module.caps.includes(CAP.KVM_AVR)); // проверено на живом 192.168.6.51
+
   const generic = matchBmcModule({ realm: null, title: null, manufacturer: 'Supermicro', ipmiOk: true });
   assert.equal(generic.module.id, 'generic-ipmi');
   assert.equal(generic.matched, false);
