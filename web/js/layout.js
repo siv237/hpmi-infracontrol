@@ -14,12 +14,15 @@ function showPage(id){
   document.querySelectorAll('.page').forEach(p=>p.style.display='none');
   const p=$('page-'+id); if(p)p.style.display='block';
   document.querySelector('.search').style.display=(id==='servers')?'':'none';
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.getAttribute('data-id')===id));
   try{ localStorage.setItem('ui.page',id); }catch{}
   if(id==='users')loadUsers();
   if(id==='iso')loadIso();
   if(id==='overview')startOverview();
+  if(id==='logs')loadLogs();
+  if(id==='groups'){initGroupsPage();loadGroupsPage();}
 }
-const IMPLEMENTED=new Set(['servers','users','iso','overview']);
+const IMPLEMENTED=new Set(['servers','users','iso','overview','logs','groups']);
 document.querySelectorAll('.nav-item').forEach(n=>{
   n.onclick=()=>{
     const id=n.getAttribute('data-id');

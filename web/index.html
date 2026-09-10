@@ -1,5 +1,5 @@
-# vim: set ft=html :
 <!doctype html>
+<!-- vim: set ft=html : -->
 <html lang="ru">
 <head>
 <meta charset="utf-8">
@@ -10,8 +10,9 @@
 <link rel="stylesheet" href="/css/dashboard.css">
 <link rel="stylesheet" href="/css/servers.css">
 <link rel="stylesheet" href="/css/console.css">
-<link rel="stylesheet" href="/css/events.css">
-<link rel="stylesheet" href="/css/ui.css">
+    <link rel="stylesheet" href="/css/events.css">
+    <link rel="stylesheet" href="/css/logs.css">
+    <link rel="stylesheet" href="/css/ui.css">
 </head>
 <body>
 <!-- АВТОРИЗАЦИЯ -->
@@ -90,62 +91,56 @@
         </div>
         <div class="ov-cards">
           <div class="ov-card">
-            <div class="top"><div class="lbl">Всего серверов</div><div class="ico srv"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/></svg></div></div>
-            <div class="v" id="ovTotal">—</div>
-            <div class="row"><span class="up">↗</span><span>всего в системе</span></div>
+            <div class="top"><div class="lbl">Проблемы подключения</div><div class="ico bad"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M15 9l-6 6M9 9l6 6"/></svg></div></div>
+            <div class="v" id="ovConnProb">—</div>
+            <div class="row"><span>из <b id="ovTotal2">—</b> серверов</span></div>
+            <div class="kv" id="ovConnList">
+              <div class="kv-row"><span class="k">Пинг пропали</span><span class="n" id="ovPingDown">0</span></div>
+              <div class="kv-row"><span class="k">IPMI недоступно</span><span class="n" id="ovIpmiDown">0</span></div>
+              <div class="kv-row"><span class="k">Вебка недоступна</span><span class="n" id="ovWebDown">0</span></div>
+            </div>
           </div>
           <div class="ov-card">
             <div class="top"><div class="lbl">Онлайн</div><div class="ico ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></div></div>
             <div class="v" id="ovUp">—</div>
-            <div class="row"><span class="up">↗</span><b id="ovUpPct">—</b><span>доступно</span></div>
+            <div class="row"><span class="up">↗</span><b id="ovUpPct">—</b><span>все каналы в норме</span></div>
             <div class="bar"><i id="ovUpBar" style="width:0%"></i></div>
+            <div class="kv">
+              <div class="kv-row"><span class="k">Предупреждения (вебка ✗)</span><span class="n" id="ovWarn">0</span></div>
+              <div class="kv-row"><span class="k">Проблемы (IPMI ✗)</span><span class="n" id="ovProb">0</span></div>
+              <div class="kv-row"><span class="k">Оффлайн (пинг ✗)</span><span class="n" id="ovDown">0</span></div>
+            </div>
           </div>
           <div class="ov-card">
-            <div class="top"><div class="lbl">Предупреждения</div><div class="ico warn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg></div></div>
-            <div class="v" id="ovWarn">—</div>
-            <div class="row"><b id="ovWarnPct">—</b><span>требуют внимания</span></div>
-            <div class="bar"><i id="ovWarnBar" style="width:0%;background:var(--amber)"></i></div>
-          </div>
-          <div class="ov-card">
-            <div class="top"><div class="lbl">Оффлайн</div><div class="ico bad"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M15 9l-6 6M9 9l6 6"/></svg></div></div>
-            <div class="v" id="ovDown">—</div>
-            <div class="row"><b id="ovDownPct">—</b><span>недоступно</span></div>
-            <div class="bar"><i id="ovDownBar" style="width:0%;background:var(--red)"></i></div>
+            <div class="top"><div class="lbl">Доступность за 24ч</div><div class="ico warn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg></div></div>
+            <div class="v" id="ovAvailPct">—</div>
+            <div class="row"><span>средняя по серверам</span></div>
+            <div class="bar"><i id="ovAvailBar" style="width:0%;background:var(--ok)"></i></div>
           </div>
         </div>
         <div class="ov-grid">
-          <div class="ov-c">
+          <div class="ov-c" style="grid-column:1/-1">
             <div class="hd">Доступность серверов <span class="sub">(опрос фонового мониторинга)</span> <span class="av-badge" id="ovAvailBadge" style="margin-left:auto">н/д</span></div>
             <canvas id="ovAvail" style="width:100%;height:150px;display:block"></canvas>
             <div class="chart-axis" id="ovAvailAxis"></div>
-          </div>
-          <div class="ov-c">
-            <div class="hd">Распределение по статусам</div>
-            <div class="ov-donut">
-              <div class="ov-donut-chart" id="ovDonut" style="--p-on:0%;--p-wa:0%"><div class="c"><div><span id="ovDonutN">—</span><small>всего серверов</small></div></div></div>
-              <div class="ov-legend" id="ovLegend"></div>
-            </div>
-          </div>
-          <div class="ov-c">
-            <div class="hd">Быстрые действия</div>
-            <div class="qa" id="ovQA">
-              <a class="top" data-action="console"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>Подключиться к консоли<span class="arr">›</span></a>
-              <a data-action="power"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v9M18.4 6.6a9 9 0 1 1-12.8 0"/></svg>Управление питанием<span class="arr">›</span></a>
-              <a data-action="iso"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3a4.5 4.5 0 0 0-1.2 8.9L9 18l3-2 3 2-1.8-6.1A4.5 4.5 0 0 0 12 3z"/></svg>Монтирование ISO<span class="arr">›</span></a>
-              <a data-action="users"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.4"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 4.5a3.4 3.4 0 0 1 0 7M17 20a6 6 0 0 0-3.2-5.3"/></svg>Пользователи и доступ<span class="arr">›</span></a>
-            </div>
           </div>
         </div>
         <div class="ov-layout">
           <div class="ov-c">
             <div class="hd">Серверы</div>
+            <div class="ov-chips" id="ovChips">
+              <span class="chip active" data-f="">Все <b id="chipAll">0</b></span>
+              <span class="chip ok" data-f="on">Онлайн <b id="chipOn">0</b></span>
+              <span class="chip wa" data-f="warn">Предупреждение <b id="chipWa">0</b></span>
+              <span class="chip pr" data-f="problem">Проблемы <b id="chipPr">0</b></span>
+              <span class="chip bad" data-f="off">Оффлайн <b id="chipOff">0</b></span>
+            </div>
             <div class="ov-tools">
               <div class="stool"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><input id="ovSearch" placeholder="Поиск по названию, IP, группе…"></div>
               <select class="sel" id="ovGroupF"><option value="">Все группы</option></select>
-              <select class="sel ov-sel-sm" id="ovStatusF"><option value="">Все статусы</option><option value="on">Онлайн</option><option value="off">Оффлайн</option><option value="none">Нет данных</option></select>
             </div>
             <table class="ov-table">
-              <thead><tr><th style="width:28px"></th><th>Имя</th><th>IPMI IP</th><th>Статус</th><th>Состояние</th><th>Температура</th><th>Группа</th><th>Последняя проверка</th></tr></thead>
+              <thead><tr><th style="width:28px"></th><th>Сервер</th><th>IPMI</th><th>Пинг</th><th>Вебка</th><th>Датчики</th><th>Группа</th><th>Последняя проверка</th></tr></thead>
               <tbody id="ovRows"><tr><td colspan="8" class="ov-empty">Загрузка…</td></tr></tbody>
             </table>
             <div class="ov-pager">
@@ -226,11 +221,30 @@
             <div class="pane">
               <!-- OVERVIEW -->
               <div class="tabpane" id="pane-overview">
-                <div class="grid">
+                <div class="grid grid-status">
                   <div class="kpi"><div class="lab">Состояние</div><div class="val" id="kpiState">—</div><div class="sub">IPMI</div></div>
                   <div class="kpi"><div class="lab">IPMI IP</div><div class="val" id="kpiIp">—</div><div class="sub" id="kpiVer">—</div></div>
                   <div class="kpi"><div class="lab">Модель</div><div class="val" id="kpiModel">—</div><div class="sub" id="kpiSub">—</div></div>
                   <div class="kpi"><div class="lab">Серийный №</div><div class="val" id="kpiSerial">—</div><div class="sub" id="kpiSerialSub">Система</div></div>
+                </div>
+                <div class="grid grid-status" id="kpiNetRow" style="margin-top:10px">
+                  <div class="kpi"><div class="lab">MAC BMC</div><div class="val" id="kpiMac" style="font-size:14px">—</div><div class="sub" id="kpiMacSub">сетевой интерфейс iRMC</div></div>
+                  <div class="kpi"><div class="lab">Прошивка BMC</div><div class="val" id="kpiBmcFw" style="font-size:14px">—</div><div class="sub" id="kpiBmcFwSub">IPMI <span id="kpiIpmiVer">—</span></div></div>
+                </div>
+
+                <div class="grid grid-metrics">
+                  <div class="kpi kpi-m"><div class="lab">Температура</div>
+                    <div class="val" id="mTemp">—</div><div class="sub" id="mTempSub">CPU, среднее</div>
+                    <canvas class="mchart" id="mTempChart"></canvas></div>
+                  <div class="kpi kpi-m"><div class="lab">Вентиляция</div>
+                    <div class="val" id="mFan">—</div><div class="sub" id="mFanSub">Скорость</div>
+                    <canvas class="mchart" id="mFanChart"></canvas></div>
+                  <div class="kpi kpi-m"><div class="lab">Отклик IPMI</div>
+                    <div class="val" id="mResp">—</div><div class="sub" id="mRespSub">время ответа</div>
+                    <canvas class="mchart" id="mRespChart"></canvas></div>
+                  <div class="kpi kpi-m"><div class="lab">Доступность</div>
+                    <div class="val" id="mAvail">—</div><div class="sub" id="mAvailSub">за 24 ч</div>
+                    <canvas class="mchart" id="mAvailChart"></canvas></div>
                 </div>
 
                 <div class="two">
@@ -295,7 +309,14 @@
                 </div>
               </div>
               <div class="tabpane" id="pane-network" style="display:none">
-                <div class="placeholder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5 5 0 0 1 7 0"/></svg><div class="tt">Сеть</div><div class="ds">Модуль в разработке.</div></div>
+                <div class="panel">
+                  <div class="ph">Сеть BMC (IPMI) <span class="ph-sub" id="netInfo"></span></div>
+                  <table class="si" id="netTable"><tr><td class="v">Загрузка…</td></tr></table>
+                </div>
+                <div class="panel" style="margin-top:12px">
+                  <div class="ph">Сырые данные <span class="ph-sub">lan print / mc info</span></div>
+                  <table class="si" id="netRawTable"><tr><td class="v">—</td></tr></table>
+                </div>
               </div>
               <div class="tabpane" id="pane-storage" style="display:none">
                 <div class="mount-card" id="storageCard">
@@ -366,6 +387,119 @@
           <table class="si utable" id="userTable"></table>
         </section>
       </div>
+
+      <!-- СТРАНИЦА: ГРУППЫ (управление деревом: корни-организации и группы) -->
+      <div class="page" id="page-groups" style="display:none">
+        <div class="page-head">
+          <h1>Группы</h1>
+          <span class="count-pill" id="grpStatTotal">0</span>
+          <div class="tools">
+            <button class="tool-btn primary" id="grpNewRootBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Новый корень</button>
+            <button class="tool-btn primary" id="grpNewGroupBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Новая группа</button>
+          </div>
+        </div>
+        <div class="page-note">Структура дерева «Серверы»: корни-организации и группы внутри них. Серверы без группы попадают в авто-филиал по IP. Изменения сразу видны в дереве меню «Серверы».</div>
+        <div class="grp-board" id="grpBoard"></div>
+      </div>
+      <!-- СТРАНИЦА: ЖУРНАЛЫ (IPMI SEL — события, предупреждения, системные сообщения) -->
+      <div class="page" id="page-logs" style="display:none">
+        <div class="logs-layout">
+          <!-- ЛЕВАЯ КОЛОНКА: фильтры + список -->
+          <section class="detail logs-card">
+            <div class="logs-head">
+              <div class="ttl">
+                <span class="logs-ttl">Журналы</span>
+                <span class="count-pill" id="logsCount">0</span>
+              </div>
+              <div class="tools">
+                <button class="icon-btn" title="Обновить" id="logsRefreshBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button>
+              </div>
+            </div>
+            <div class="logs-sub">События, предупреждения и системные сообщения iRMC (IPMI SEL)</div>
+
+            <div class="logs-chips" id="logsChips">
+              <span class="lp-chip active" data-sev="">Все <b id="logsC_all">0</b></span>
+              <span class="lp-chip cr" data-sev="critical">Критические <b id="logsC_critical">0</b></span>
+              <span class="lp-chip wa" data-sev="warning">Предупреждения <b id="logsC_warning">0</b></span>
+              <span class="lp-chip in" data-sev="info">Информационные <b id="logsC_info">0</b></span>
+            </div>
+
+            <div class="logs-filters">
+              <select class="sel" id="logsDate" title="Период">
+                <option value="">За всё время</option>
+                <option value="1">Сегодня</option>
+                <option value="7">7 дней</option>
+                <option value="30">30 дней</option>
+              </select>
+              <select class="sel" id="logsCat" title="Категория">
+                <option value="">Все категории</option>
+                <option value="temp">Температура</option>
+                <option value="fan">Вентиляция</option>
+                <option value="power">Питание</option>
+                <option value="voltage">Напряжение</option>
+                <option value="cpu">Процессор</option>
+                <option value="memory">Память</option>
+                <option value="watchdog">Watchdog</option>
+                <option value="critical">Критические</option>
+                <option value="other">Прочие</option>
+              </select>
+              <select class="sel" id="logsServer" title="Сервер">
+                <option value="">Все серверы</option>
+              </select>
+              <button class="tool-btn" id="logsResetBtn">Сбросить</button>
+            </div>
+
+            <table class="ov-table">
+              <thead><tr><th>Время</th><th>Событие</th><th>Сервер</th><th>Статус</th></tr></thead>
+              <tbody id="logsRows"><tr><td colspan="4" class="ov-empty">Загрузка…</td></tr></tbody>
+            </table>
+            <div class="ov-pager">
+              <span id="logsRange">—</span>
+              <span class="ov-pages" id="logsPages"></span>
+              <select class="sel ov-sel-sm" id="logsPerPage" title="На странице">
+                <option value="10">10 на странице</option>
+                <option value="20">20 на странице</option>
+                <option value="50">50 на странице</option>
+              </select>
+            </div>
+          </section>
+
+          <!-- ПРАВАЯ КОЛОНКА: детали события -->
+          <section class="detail logs-detail">
+            <div id="logsEmpty" style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:70px 20px;color:var(--faint)">
+              <svg style="width:46px;height:46px;margin-bottom:14px;color:#c3cad6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16M6 15l6-6 4 4 4-4"/></svg>
+              <div style="font-size:15px;font-weight:600;color:var(--muted)">Выберите запись журнала</div>
+            </div>
+            <div id="logsDetail" style="display:none">
+              <div class="logs-det-head">
+                <span class="logs-lvl" id="ldIco"></span>
+                <div class="ld-titlebox">
+                  <div class="ld-title" id="ldTitle">—</div>
+                  <div class="ld-sub" id="ldSub">—</div>
+                </div>
+                <span class="logs-when" id="ldWhen"></span>
+              </div>
+              <div class="logs-desc" id="ldDesc"></div>
+              <div class="panel">
+                <div class="ph">Основная информация</div>
+                <table class="si" id="ldTable"></table>
+              </div>
+              <div class="panel" id="ldRecentPanel">
+                <div class="ph">События (последние)</div>
+                <div class="ev-list" id="ldRecent"></div>
+              </div>
+              <div class="panel">
+                <div class="ph">Комментарии</div>
+                <div class="logs-comment">
+                  <textarea id="ldComment" rows="3" placeholder="Добавить комментарий…"></textarea>
+                  <button class="tool-btn primary" id="ldCommentBtn">Сохранить</button>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+
       <!-- СТРАНИЦА: ПРОФИЛЬ -->
       <div class="page" id="page-profile" style="display:none">
         <div class="page-head"><h1>Профиль</h1></div>
@@ -398,6 +532,8 @@
       <div class="fields">
         <div class="field"><label>Название</label><input type="text" id="d_name"></div>
         <div class="field"><label>Адрес (host/IP)</label><input type="text" id="d_host" required></div>
+        <div class="field"><label>Корень (организация)</label><select id="d_root" class="sel"></select></div>
+        <div class="field"><label>Филиал / группа</label><input type="text" id="d_group" list="d_groupList"><datalist id="d_groupList"></datalist></div>
         <div class="field"><label>Пользователь</label><input type="text" id="d_user"></div>
         <div class="field"><label>Пароль</label><input type="password" id="d_pass"></div>
         <div class="field"><label>Порт</label><input type="number" id="d_port" value="80"></div>
@@ -451,15 +587,18 @@
 <script src="/js/tree.js"></script>
 <script src="/js/detail.js"></script>
 <script src="/js/ipmi.js"></script>
+<script src="/js/network.js"></script>
 <script src="/js/inventory.js"></script>
 <script src="/js/tabs.js"></script>
 <script src="/js/iso.js"></script>
 <script src="/js/users.js"></script>
+<script src="/js/groups.js"></script>
 <script src="/js/tree-controls.js"></script>
 <script src="/js/console.js"></script>
 <script src="/js/layout.js"></script>
-<script src="/js/overview.js"></script>
-<script src="/js/auth.js"></script>
+    <script src="/js/overview.js"></script>
+    <script src="/js/logs.js"></script>
+    <script src="/js/auth.js"></script>
 <script src="/js/init.js"></script>
 </body>
 </html>

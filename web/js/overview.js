@@ -1,9 +1,14 @@
-// ---- дашборд «Обзор» (п.1): по макету InfraControl -----------------------
-let ovTimer=null, ovList=[];
+// ---- дашборд «Обзор» (по макету 09.09: три канала — ipmi/ping/web) --------
+let ovTimer=null, ovList=[], ovFilter='';
 function stChip(st){
-  const cls=st==='on'?'on':(st==='off'?'bad':'gray');
-  const txt=st==='on'?'Онлайн':(st==='off'?'Оффлайн':'Нет данных');
-  return '<span class="stchip '+cls+'"><span class="dot"></span>'+txt+'</span>';
+  const m={on:['on','Онлайн'],warn:['wa','Предупреждение'],problem:['pr','Проблема'],off:['bad','Оффлайн'],none:['gray','Нет данных']};
+  const c=m[st]?m[st][0]:'gray', t=m[st]?m[st][1]:'Нет данных';
+  return '<span class="stchip '+c+'"><span class="dot"></span>'+t+'</span>';
+}
+// Ячейка канала: OK / ✗ / — (нет данных)
+function chCell(ch){
+  if(!ch)return '<span class="chcell na">—</span>';
+  return ch.ok?'<span class="chcell ok">OK</span>':'<span class="chcell bad">✗</span>';
 }
 // График доступности за окно — area-кривая (почасовые бакеты) на canvas
 function drawAvailabilityChart(av){
@@ -40,48 +45,42 @@ function drawAvailabilityChart(av){
 async function loadOverview(){
   const j=await api('/api/overview',{_noKick:true});
   const s=j&&j.ok&&j.summary?j.summary:{};
-  const total=s.total||0, on=s.on||0, off=s.off||0, none=s.none||0;
-  const warn=none; // «требуют внимания» = снимков нет (статус неизвестен)
-  $('ovTotal').textContent=total;
-  $('ovUp').textContent=on;
-  $('ovUpPct').textContent=total?Math.round(on/total*100)+'%':'—';
+  const total=s.total||0, on=s.on||0, warn=s.warn||0, problem=s.problem||0, off=s.off||0;
+  const set=(id,v)=>{const e=$(id);if(e)e.textContent=v;};
+  set('ovTotal2',total); set('ovTotal',total);
+  set('ovConnProb',(s.pingDown||0)+(s.ipmiDown||0)+(s.webDown||0));
+  set('ovPingDown',s.pingDown||0); set('ovIpmiDown',s.ipmiDown||0); set('ovWebDown',s.webDown||0);
+  set('ovUp',on); set('ovUpPct',total?Math.round(on/total*100)+'%':'—');
   $('ovUpBar').style.width=(total?on/total*100:0)+'%';
-  $('ovWarn').textContent=warn;
-  $('ovWarnPct').textContent=total?'1 из '+total:'—';
-  $('ovWarnBar').style.width=(total?warn/total*100:0)+'%';
-  $('ovDown').textContent=off;
-  $('ovDownPct').textContent=total?'1 из '+total:'—';
-  $('ovDownBar').style.width=(total?off/total*100:0)+'%';
-  const pOn=total?on/total*100:0, pWa=total?warn/total*100:0;
-  $('ovDonut').style.setProperty('--p-on',pOn+'%');
-  $('ovDonut').style.setProperty('--p-wa',(pOn+pWa)+'%');
-  $('ovDonutN').textContent=total;
-  $('ovLegend').innerHTML=[
-    ['#188a4c','Онлайн',on,total?Math.round(on/total*100)+'%':'—'],
-    ['var(--amber)','Предупреждения',warn,total?Math.round(warn/total*100)+'%':'—'],
-    ['#e23a3a','Оффлайн',off,total?Math.round(off/total*100)+'%':'—'],
-  ].map(x=>'<div class="li"><span class="dot" style="background:'+x[0]+'"></span><span>'+x[1]+'</span><span class="p">'+x[3]+'</span><span class="n">'+x[2]+'</span></div>').join('');
-  drawAvailabilityChart(j.availability||null);
-  // CSV температуры по серверам — берём из сенсоров
+  set('ovWarn',warn); set('ovProb',problem); set('ovDown',off);
+  // доступность
+  const av=j&&j.availability?j.availability:{};
+  set('ovAvailPct',av.avgPct!==null&&av.avgPct!==undefined?av.avgPct+'%':'—');
+  $('ovAvailBar').style.width=(av.avgPct||0)+'%';
+  // чипы-фильтры: счётчики
+  set('chipAll',total); set('chipOn',on); set('chipWa',warn); set('chipPr',problem); set('chipOff',off);
+  drawAvailabilityChart(av||null);
+  // таблица серверов: температура — из сенсоров (как раньше)
   const sres=await api('/api/ipmi/sensors',{_noKick:true});
   const sensors=(sres&&sres.sensors)||{};
   const list=(j.servers||[]).map(r=>{
     const sen=sensors[r.id];
-    let temp='—', maxT=null;
+    let temp='—', maxT=null, nSensors=0;
     if(sen&&!sen.error&&(sen.temps||[]).length){
       const cpu=(sen.temps||[]).filter(t=>/^CPU/i.test(t.name));
       const group=cpu.length?cpu:(sen.temps||[]);
       maxT=Math.max.apply(null,group.map(t=>t.value));
-      temp=group.length?group.map(t=>esc(t.name)+'='+t.value+'°C').join(', '):'—';
+      nSensors=(sen.temps||[]).length+(sen.fans||[]).length;
+      temp=group.length?group.map(t=>t.value+'°C').join(', '):'—';
     }
-    return {...r,_temp:temp,_maxT:maxT};
+    return {...r,_temp:temp,_maxT:maxT,_nSensors:nSensors};
   });
   ovList=list;
   renderOverviewRows(list);
-  // последние проверки: серверы отсортированы по времени снимка/опроса
+  // последние проверки: по времени последнего опроса
   const checks=list.slice().sort((a,b)=>new Date(b.lastCheck||0)-new Date(a.lastCheck||0)).slice(0,12);
   $('ovChecks').innerHTML=checks.length?checks.map(r=>{
-    const st=r.status==='on'?'#188a4c':(r.status==='off'?'#e23a3a':'#98a1b0');
+    const st=r.status==='on'?'#188a4c':(r.status==='off'?'#e23a3a':(r.status==='problem'?'#e23a3a':(r.status==='warn'?'#e2a13c':'#98a1b0')));
     return '<div class="chk"><span class="st" style="background:'+st+'"></span><span class="nm">'+esc(r.name||r.host)+'</span><span class="ip">'+esc(r.host)+'</span><span class="t">'+(r.lastCheck?fmtDump(new Date(r.lastCheck)):'—')+'</span></div>';
   }).join(''):'<div class="ov-empty">Серверы не добавлены</div>';
   // статистика по группам
@@ -99,8 +98,9 @@ let ovPage=1; const OV_PAGE=10;
 function renderOverviewRows(list){
   const q=($('ovSearch')&&$('ovSearch').value||'').toLowerCase().trim();
   const gf=$('ovGroupF')&&$('ovGroupF').value||'';
-  const sf=$('ovStatusF')&&$('ovStatusF').value||'';
+  const sf=''; // фильтр статуса теперь чипами (ovFilter)
   const rows=list.filter(r=>{
+    if(ovFilter && r.status!==ovFilter)return false;
     if(gf && (r.group||'Без группы')!==gf)return false;
     if(sf && (r.status||'none')!==sf)return false;
     if(q && !((r.name||r.host||'').toLowerCase().includes(q)||(r.host||'').toLowerCase().includes(q)||(r.group||'').toLowerCase().includes(q)))return false;
@@ -111,15 +111,17 @@ function renderOverviewRows(list){
   const from=(ovPage-1)*OV_PAGE, to=Math.min(rows.length,from+OV_PAGE);
   const slice=rows.slice(from,to);
   $('ovRows').innerHTML=slice.length?slice.map(r=>{
+    const ch=r.channels||{};
     let state='—';
     if(r._maxT!==null)state='<span class="bar-t"><i style="width:'+Math.min(100,(r._maxT-20)*2)+'%"></i></span> '+(r._maxT>=45?'<b style="color:var(--red)">'+r._maxT+'°C</b>':'<b>'+r._maxT+'°C</b>');
+    const nS=r._nSensors||r.sensorCount||0;
     return '<tr><td><input type="checkbox" class="ck"></td>'
-      +'<td><span class="srv-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/></svg></span><span class="nm">'+esc(r.name||r.host)+'</span></td>'
-      +'<td>'+esc(r.host)+'</td>'
-      +'<td>'+stChip(r.status)+'</td>'
-      +'<td>'+state+'</td>'
-      +'<td>'+(r._temp!=='—'?r._temp:'—')+'</td>'
-      +'<td class="hostcell">'+esc(r.group||'Без группы')+'</td>'
+      +'<td><span class="srv-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/></svg></span><span class="nm">'+esc(r.name||r.host)+'</span><div style="color:var(--muted);font-size:11.5px">'+esc(r.host)+'</div></td>'
+      +'<td>'+chCell(ch.ipmi)+'</td>'
+      +'<td>'+chCell(ch.ping)+'</td>'
+      +'<td>'+chCell(ch.web)+'</td>'
+      +'<td>'+(nS?nS+' ок':'—')+(r._maxT!==null?' · '+state:'')+'</td>'
+      +'<td>'+esc(r.group||'Без группы')+'</td>'
       +'<td>'+(r.lastCheck?fmtDump(new Date(r.lastCheck)):'—')+'</td></tr>';
   }).join(''):'<tr><td colspan="8" class="ov-empty">Серверы не добавлены</td></tr>';
   // пагинация
@@ -162,4 +164,11 @@ document.querySelectorAll('#ovQA a').forEach(a=>{
 });
 $('ovSearch').oninput=()=>{ovPage=1;renderOverviewRows(ovList);};
 $('ovGroupF').onchange=()=>{ovPage=1;renderOverviewRows(ovList);};
-$('ovStatusF').onchange=()=>{ovPage=1;renderOverviewRows(ovList);};
+// чип-фильтр статуса (Все/Онлайн/Предупреждение/Проблемы/Оффлайн)
+document.querySelectorAll('#ovChips .chip').forEach(ch=>{
+  ch.onclick=()=>{
+    document.querySelectorAll('#ovChips .chip').forEach(x=>x.classList.toggle('active',x===ch));
+    ovFilter=ch.getAttribute('data-f')||'';
+    ovPage=1;renderOverviewRows(ovList);
+  };
+});

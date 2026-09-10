@@ -5,16 +5,30 @@ $('filterBtn').onclick=()=>snack('Фильтр — в разработке');
 $('helpBtn').onclick=()=>snack('Справка — в разработке');
 $('editBtn').onclick=()=>{$('actionsMenu').classList.remove('show');if(!isAdmin()){snack('Только администратор может изменять серверы');return;}const s=servers.find(x=>x.id===sel);openDlg(s);};
 $('delBtn').onclick=()=>{$('actionsMenu').classList.remove('show');if(sel)delServer(sel);};
-function openDlg(s){
+function openDlg(s,preset){
+  // preset: {root, group} — из контекстного меню ветки/группы
+  const pre=(preset&&typeof preset==='object')?preset:{group:preset||''};
   $('modalTitle').textContent=s?'Изменить сервер':'Добавить сервер';
   $('d_name').value=s?(s.name||''):''; $('d_host').value=s?(s.host||''):''; $('d_user').value=s?(s.username||'admin'):'admin'; $('d_pass').value='';
   $('d_port').value=s?(s.port||80):80; $('d_secure').checked=s?(!!s.secure):false;
+  // корень (организация): существующие корни из ui.json + серверов
+  const roots=treeRootsOf();
+  $('d_root').innerHTML=roots.map(R=>'<option value="'+esc(R)+'"'+((s?rootKeyOf(s):pre.root||'')===R?' selected':'')+'>'+esc(srvRootName(R))+'</option>').join('');
+  // группа: подсказки по группам выбранного корня; пусто = авто-филиал по IP
+  const fillGroups=()=>{
+    const R=$('d_root').value;
+    $('d_groupList').innerHTML=treeGroupsOf(R).map(g=>'<option value="'+esc(g)+'">').join('');
+  };
+  fillGroups();
+  $('d_root').onchange=fillGroups;
+  $('d_group').value=s?((s.group===null||s.group===undefined)?'':String(s.group)):(pre.group||'');
   $('modalBack').classList.add('show');
   $('dlgSave').onclick=async(e)=>{
     e.preventDefault();
     if(!isAdmin()){snack('Только администратор может изменять серверы');return;}
     const host=$('d_host').value.trim(); if(!host)return;
-    const base={name:$('d_name').value.trim()||host,host,username:$('d_user').value.trim(),port:Number($('d_port').value)||80,secure:$('d_secure').checked};
+    const gval=$('d_group').value.trim();
+    const base={name:$('d_name').value.trim()||host,host,username:$('d_user').value.trim(),port:Number($('d_port').value)||80,secure:$('d_secure').checked,group:gval===''?null:gval,root:$('d_root').value||''};
     try{
       let resp;
       if(s){

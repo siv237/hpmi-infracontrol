@@ -1,10 +1,33 @@
 // ---- выбор сервера -------------------------------------------------------
 function select(id){
   sel=id; renderTree();
+  try{ localStorage.setItem('ui.sel',id); }catch{}
   showDetail();
+  // сразу отрисовать выбранного из кеша (данные/«—») — панель всегда
+  // соответствует выбору, не ждём сетевых ответов (недоступный сервер
+  // отвечает таймаутом; раньше всё это время висел прежний сервер — BUG-004)
+  renderDetail();
+  if(typeof resetMetrics==='function')resetMetrics();
   loadInv(id);
   loadSensors(id);
+  loadMetrics(id);
+  // перечитать активную вкладку (сеть/оборудование/login/etc.) — иначе при
+  // переключении сервера на той же вкладке остаются данные ПРЕДЫДУЩЕГО
+  loadActiveTab(id);
   showConsole(); // консоль выбранного сервера или заглушка
+}
+
+// Перечитывает данные активной вкладки карточки для выбранного сервера.
+// Все load*() защищены `if (id!==sel) return`, поэтому гонок нет.
+function loadActiveTab(id){
+  const t=$('tabs'), cur=document.querySelector('#tabs .tab.active');
+  const name=cur?cur.getAttribute('data-tab'):'overview';
+  if(name==='network'){ try{ loadNetwork(id); }catch{} }
+  else if(name==='health'){ try{ loadSensors(id); }catch{} }
+  else if(name==='overview'){ try{ loadMetrics(id); }catch{} }
+  else if(name==='hardware'){ try{ renderHWTable(dbgInv[id]||null); }catch{} }
+  else if(name==='info'){ try{ renderSI(dbgInv[id]||null); }catch{} }
+  else if(name==='storage'){ try{ renderStorage(); }catch{} }
 }
 function hideDetail(){$('detBody').style.display='none';$('emptyHint').style.display='flex';}
 function showDetail(){const s=servers.find(x=>x.id===sel);if(!s){hideDetail();return;}$('detBody').style.display='block';$('emptyHint').style.display='none';renderMount(sel);}
@@ -22,6 +45,7 @@ function renderDetail(){
   kpiState.textContent=st==='on'?'Онлайн':(st==='err'?'Недоступен':'Нет данных');
   kpiState.className='val '+(st==='on'?'okc':(st==='err'?'':''));
   $('kpiIp').textContent=s.host;
+  renderKpiNet(dbgNet[sel]||null);
   const inv=dbgInv[sel];
   if(inv){
     const model=valFrom(inv,['system type','model','model name','product name','system model']);
@@ -48,6 +72,21 @@ function renderDetail(){
 }
 
 function trustKeys(inv){ return inv; }
+
+// KPI-строка сети BMC (MAC/прошивка/IPMI-версия) — из последнего сетевого
+// снимка опроса (dbgNet заполняет loadSensors из pollCache.net)
+function renderKpiNet(net){
+  const set=(id,v)=>{const e=$(id);if(e)e.textContent=v;};
+  if(net&&(net.mac||net.bmcFirmware)){
+    set('kpiMac',net.mac||'—');
+    set('kpiBmcFw',net.bmcFirmware||'—');
+    set('kpiIpmiVer',net.ipmiVersion||'—');
+    set('kpiMacSub',net.ipSource==='dhcp'?'DHCP · сетевой интерфейс iRMC':'static · сетевой интерфейс iRMC');
+  } else {
+    set('kpiMac','—');set('kpiBmcFw','—');set('kpiIpmiVer','—');
+    set('kpiMacSub','нет данных опроса');
+  }
+}
 
 const SI_ROWS=[
   {k:'Производитель', src:['system manufacturer','manufacturer','producer','vendor']},

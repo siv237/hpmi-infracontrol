@@ -19,6 +19,7 @@
 | `server/irmc-decode.js` | фреймбуфер + декодер видео | `PixelBufferImage`, `GraphicsMgr` |
 | `server/irmc.js` | клиент протокола (сокет, рукопожатие, парсер, ввод) | `CConn`, `MessageReceiverThread`, `MessageSender`, `ServerHandshake` |
 | `server/store.js` | хранилище серверов, creds шифр. AES-256-GCM | `SettingsResMgr`/`ServerDialog` |
+| `server/db.js` | SQLite-база сбора IPMI (data/db/): транзакция на опрос, дедуп SEL, история изменений | — |
 | `server/index.js` | HTTP-сервер + `/api/test`, `/api/servers` + статика | `MahoganyViewer` (запуск) |
 | `web/index.html` | каркас: разметка всех страниц/модалок + подключение модулей | `ServerDialog` |
 | `web/css/*` | 7 CSS-модулей (base, components, dashboard, servers, console, events, ui) | — |
@@ -26,13 +27,16 @@
 
 ## Хранилище и шифрование
 
-- `data/server.json` с `enc`-блобом (AES-256-GCM, ключ `data/key.bin`, режим 600).
+- `data/servers.json` с `enc`-блобом (AES-256-GCM, ключ `data/key.bin`, режим 600).
 - Мета (id/name/host/port/secure) — в открытом виде для списка; пароль/httpdata —
   зашифрованы.
 - API: `GET/POST /api/servers`, `DELETE /api/servers/:id`, `POST /api/test`
   принимает `{serverId}` (расшифровка с диска) или инлайн-конфиг.
 - Примечание: ключ лежит рядом с данными — защита «от постороннего глаза» на диске,
   не от администратора машины.
+- Весь собранный IPMI-материал — в SQLite `data/db/` (см.
+  `knowledge/db-schema.md`): инвариант `rm -rf data/db/` очищает сбор, но не
+  настройки; конфиги серверов/пользователи/ISO/monuts — в JSON вне БД.
 
 ## TLS для старых прошивок
 

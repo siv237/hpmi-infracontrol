@@ -27,11 +27,20 @@ LLM Wiki проекта iRMC Viewer (этап 1). Страницы в `wiki/`, �
   локальный и проводной протоколы, эмуляция на сервере, контроль целостности.
 - [knowledge/irmc-ipmi.md](knowledge/irmc-ipmi.md) — метрики по IPMI-over-LAN
   (RMCP+/UDP 623/664): чтение темп./кулеров, интервальный опрос, не трогает KVM.
+- [knowledge/db-schema.md](knowledge/db-schema.md) — схема SQLite-базы сбора
+  (data/db/): таблицы, транзакция на опрос, дедуп SEL в БД, история только
+  изменений, инвариант rm -rf data/db/, миграция со старой схемы.
 - [knowledge/testing.md](knowledge/testing.md) — стек и best practices
   тестирования фронтенда (node:test + puppeteer e2e-смок), правила ведения.
 - [knowledge/dev-env.md](knowledge/dev-env.md) — рабочее окружение форка
   (Node 22, gh): нестабильный npmjs и установка через npmmirror, фикс
   переносимости тестов.
+- [knowledge/tree-groups.md](knowledge/tree-groups.md) — редактор дерева
+  серверов (п.8): group/root у серверов, ui.json (roots/groups/паспорт),
+  контекстное меню, drag&drop, вкладка «Группы».
+- [knowledge/server-deploy.md](knowledge/server-deploy.md) — ⚙ служебная
+  (вне git): спецификация сервера деплоя (OS, сеть, репозитории, установленный
+  софт, что ставит deploy.sh).
 
 ## Баги
 
