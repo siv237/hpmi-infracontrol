@@ -33,6 +33,9 @@ import tls from 'node:tls';
 import crypto from 'node:crypto';
 import os from 'node:os';
 
+// Отладка IVTP: IRMC_DEBUG=1 (или IVTP_DEBUG) — дамп HID-пакетов в лог сервера.
+const DEBUG = !!Number(process.env.IVTP_DEBUG || process.env.IRMC_DEBUG || 0);
+
 const IVTP = {
   HID: 1, PAUSE: 4, RESUME: 6, STOP_IMMEDIATE: 8, BLANK_SCREEN: 9,
   GET_USB_MOUSE_MODE: 10, GET_FULL_SCREEN: 11,
@@ -477,8 +480,12 @@ export class IvtpClient {
       if (down) this._keys.add(hid);
       else this._keys.delete(hid);
     }
+    // Формат S4 (USBKeyProcessorEnglish.USBKeyboardRepPkt, 8б):
+    // [0]=modifiers, [1]=pressFlag (1=down, 0=up), [2..7]=до 6 кодов.
+    // Байт [1] — НЕ резерв: BMC трактует отчёт как СОБЫТИЕ клавиши.
     const rep = Buffer.alloc(8);
     rep[0] = this._mods & 0xff;
+    rep[1] = down ? 1 : 0;
     let i = 2;
     for (const k of this._keys) { if (i > 7) break; rep[i++] = k; }
     this.sendKeyReport(rep);
@@ -499,30 +506,32 @@ export class IvtpClient {
     this.sendMouseAbs(this._mbtn & 7, this._mx || 0, this._my || 0, this._mwheel, w, h);
     if (this._mwheel) { this._mwheel = 0; } // колесо — импульс
   }
-  // HID-пакет по декомпиляту USBKeyboardRep/USBMouseRep (put-последовательность):
-  // [0..7] IVTP-hdr; [8..15] «IUSB    »; [16]=1 major; [17]=0 minor;
-  // [18]=32 hdrSize; [19] checksum; [20..23] dataLen(клава 9 / мышь 7);
-  // [24]=0; [25] devType(0x30/0x31); [26] proto(0x10/0x20); [27]=0x80;
-  // [28]=2 devNum; [29] ifNum(клава 0 / мышь 1); [30..31]=0;
-  // [32..35] seq; [36..39]=0; [40] tailLen(клава 8 / мышь 6);
-  // [41..] report. pktSize = длина-8: клава 41 (буфер 49), мышь 39 (47).
-  // Прежняя версия писала seq@30/tailLen@38/report@39 — на 2 байта раньше
-  // эталона: BMC не видел отчёты → клава/мышь молчали.
+  // HID-пакет — точный порт USBKeyboardRep.report()/USBMouseRep.ABSreport()
+  // (put-последовательность, позиции пересчитаны по Java):
+  // [0..7] IVTP-hdr; [8..15] «IUSB    »; [16]=1; [17]=0; [18]=32;
+  // [19..22] dataLen int (клава 9 / мышь 7); [23]=0; [24] devType(0x30/0x31);
+  // [25] proto(0x10/0x20); [26]=0x80; [27]=2 devNum; [28] ifNum(0/1);
+  // [29..30]=0; [31..34] seq; [35..38]=0; [39] tailLen(8/6); [40..] report.
+  // Длины: клава буфер 49 / pktSize 41 (report 8б + pad [48]); мышь 47 / 39.
+  // Checksum: сумма [8..39] (когда [19] ещё = dataLen), затем [19] = -sum
+  // (Java put(19, …) — перезаписывает младший байт dataLen!).
+  // WARNING: прежние версии сдвигали seq/tailLen/report на +1/+2 — BMC
+  // не распознавал отчёты (клава/мышь молчали).
   _sendHid(devType, proto, ifNum, javaDataLen, tailLen, report) {
-    const pkt = Buffer.alloc(41 + report.length, 0);
+    const pkt = Buffer.alloc(40 + report.length + 1, 0); // 49 клава / 47 мышь
     ivtpHdr(IVTP.HID, pkt.length - 8, 0).copy(pkt, 0);
     pkt.write('IUSB    ', 8, 8, 'latin1');
-    pkt[16] = 1; pkt[17] = 0; pkt[18] = 32; // major/minor/hdrSize
-    // [19] — checksum (ниже)
-    pkt.writeInt32LE(javaDataLen, 20);
-    pkt[24] = 0;
-    pkt[25] = devType; pkt[26] = proto; pkt[27] = 0x80; pkt[28] = 2; pkt[29] = ifNum;
-    pkt.writeInt32LE(this._seq++, 32);
-    pkt[40] = tailLen;
-    report.copy(pkt, 41);
+    pkt[16] = 1; pkt[17] = 0; pkt[18] = 32;
+    pkt.writeInt32LE(javaDataLen, 19); // [19] ниже перезапишет checksum
+    pkt[23] = 0;
+    pkt[24] = devType; pkt[25] = proto; pkt[26] = 0x80; pkt[27] = 2; pkt[28] = ifNum;
+    pkt.writeInt32LE(this._seq++, 31);
+    pkt[39] = tailLen;
+    report.copy(pkt, 40);
     let sum = 0;
     for (let i = 8; i <= 39; i++) sum = (sum + pkt[i]) & 0xff;
     pkt[19] = (-sum) & 0xff;
+    if (DEBUG) console.log('[ivtp] HID >>', pkt.subarray(0, 8 + 16).toString('hex'), '…', pkt.subarray(39).toString('hex'));
     this.sock.write(pkt);
     return pkt;
   }

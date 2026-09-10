@@ -210,14 +210,9 @@ export async function getSession(cfg) {
     const s4 = await s4Login(secure, host, port, username, password);
     if (s4) {
       const page = await get(secure, host, port, s4.pagePath, { 'User-Agent': 'Mozilla/5.0' });
-      console.log('[s4] вход ок, страница:', page.status, 'len:', (page.body || '').length, 'sid:', s4.sid.slice(0, 6) + '…');
       link = /href="(avr\.jnlp\?[^"]+)"/i.exec(page.body || '');
-      console.log('[s4] avr.jnlp на странице:', link ? 'есть' : 'НЕТ');
       if (link) {
         const j = await get(secure, host, port, '/' + link[1].replace(/&amp;/g, '&'), { 'User-Agent': 'Mozilla/5.0' });
-        console.log('[s4] jnlp:', j.status, 'len:', (j.body || '').length, 'loc:', j.headers && j.headers.location || '-');
-        console.log('[s4] jnlp head:', JSON.stringify((j.body || '').slice(0, 500)));
-        console.log('[s4] jnlp tail:', JSON.stringify((j.body || '').slice(-1200)));
         const argsS4 = {};
         // S4-аргументы идут ПАРАМИ: <argument>-kvmtoken</argument><argument>VAL</argument>
         const argv = [];
@@ -228,7 +223,7 @@ export async function getSession(cfg) {
           const k = argv[i].replace(/^-/, '');
           argsS4[k] = argv[i + 1];
         }
-        console.log('[s4] jnlp args:', JSON.stringify(Object.keys(argsS4)));
+        console.log('[s4] сессия ок, sid:', s4.sid.slice(0, 6) + '…');
         return {
           host, username,
           // S4-консоль: CONNECT-туннель на web-порт (kvmport), не VncPort

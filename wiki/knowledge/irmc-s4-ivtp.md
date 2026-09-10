@@ -80,12 +80,19 @@ VESA16FrameHndlr.get_set_byte) — не реализовано, на 042 не в
   [28]=2 devNum; [29] ifNum (0/1); [30..31]=0; [32..35] seq;
   [36..39]=0; [40] tailLen; [41..] USB-отчёт`. Checksum [19] =
   -(сумма байт [8..39]) & 0xff.
-- клава: буфер 49б / pktSize 41; dataLen 9; tailLen 8; отчёт
-  [mods,0,k1..k6];
+- клава: буфер 49б / pktSize 41; dataLen 9; tailLen 8; отчёт 8б
+  (USBKeyboardRepPkt): **[0]=mods, [1]=pressFlag (1=down / 0=up — это
+  СОБЫТИЕ, не резерв!), [2..7]=до 6 HID-кодов**. Прежний формат
+  [mods,0,k1..k6] BMC не принимал — ввод молча терялся;
 - мышь ABS: буфер 47б / pktSize 39; dataLen 7; tailLen 6; отчёт
-  `btn(1) x-i16 y-i16 wheel(1)` (×32767/screenW). Режим мыши BMC
-  сообщает в [10] (2=ABSOLUTE); [28] для ВЫБОРА режима шлётся как
-  hdr(28, size=0, status=mode) — **не payload!** (SendMouseMode).
+  `btn(1) x-i16 y-i16 wheel(1)` (×32767/screenW). btn: bit0 L, bit1 R,
+  bit2 M (m_mouseListener). Режим мыши BMC сообщает в [10] (2=ABSOLUTE);
+  [28] для ВЫБОРА режима шлётся как hdr(28, size=0, status=mode) —
+  **не payload!** (SendMouseMode).
+- Проверка ввода без глазами: ASCII-рендер fb до/после (в тесте «kilo»
+  строки консоли изменились — ввод подтверждён). Диф-метрика по пикселям
+  обманчива на текстовых консолях (курсор не мигает — диф 0 даже при
+  живом вводе).
 
 ГРАБЛИ (все уже наступлены):
 - **Одна KVM-сессия на BMC**: новое подключение (в т.ч. чужой JViewer
