@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { IrmcClient, testIrmc } from './irmc.js';
-import { IvtpClient } from './platforms/ami-soc/console-ivtp.js';
+import { matchPlatform } from './sdk/registry.js';
 import * as ipmi from './ipmi.js';
 import * as db from './db.js';
 import { checkChannels, ping as pingChannel, tcpPort } from './channels.js';
@@ -26,11 +26,14 @@ import { attachVnc } from './vnc.js';
 import { encodePng, saveScreenshot } from './png.js';
 import * as iso from './iso.js';
 import * as m2 from './m2.js';
-import { S4Cmdir } from './platforms/ami-soc/s4cmdir.js';
 
 const PORT = Number(process.env.PORT || 1845);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
+
+// SDK, передаваемый модулям платформ (server/sdk/contracts.js). Модули работают
+// только через него, не заглядывая во внутренности ядра.
+const SDK = { version: 1, log: (m) => { if (process.env.IRMC_DEBUG === '1') console.log(m); } };
 
 // === База собранных IPMI-данных (фаза 2) — data/db/ipmi.sqlite ============
 // Весь сбор (сенсоры/SEL/опросы/инвентарь/версии/события) — в SQLite.
@@ -84,29 +87,30 @@ function createSession(name, host) {
     fb(rects) {
       const c = sess.cli;
       if (!c) return { width: 0, height: 0, pix: new Uint32Array(0) };
-      // IVTP (S4): pix уже RGBA-Uint32Array — отдаём напрямую.
-      if (sess.engine === 'ivtp') return { width: c.fb.width, height: c.fb.height, pix: c.fb.pix };
+      // Контракт: если у фреймбуфера нет getRGB() — pix уже канон 0x00RRGGBB
+      // (IVTP/S4); иначе палитру раскрывает движок (S2 getRGB).
+      if (typeof c.fb.getRGB !== 'function') return { width: c.fb.width, height: c.fb.height, pix: c.fb.pix };
       return { width: c.fb.width, height: c.fb.height, pix: rects ? c.fb.getRGBFor(rects) : c.fb.getRGB() };
     },
     fbSize() { const c = sess.cli; return c ? { width: c.fb.width, height: c.fb.height } : { width: 0, height: 0 }; },
     key: (k, d) => {
       const c = sess.cli; if (!c) return;
-      if (sess.engine === 'ivtp') { c.keyEvent(k, d); return; } // HID-код -> IUSB
+      if (typeof c.keyEvent === 'function') { c.keyEvent(k, d); return; } // HID-код -> IUSB
       c.key(k, d);
     },
     // IVTP: сборка USB-HID отчётов из потока событий (см. ivtpKey/ivtpMouse)
     ivtpKey(hid, down) {
-      const c = sess.cli; if (!c || sess.engine !== 'ivtp') return;
+      const c = sess.cli; if (!c || typeof c.keyEvent !== 'function') return;
       c.keyEvent(hid, down);
     },
     mouseMove: (x, y) => {
       const c = sess.cli; if (!c) return;
-      if (sess.engine === 'ivtp') { c.mouseAbs(x, y); return; }
+      if (typeof c.mouseAbs === 'function') { c.mouseAbs(x, y); return; }
       c.mouseMove(x, y);
     },
     buttonState: (x, y, m) => {
       const c = sess.cli; if (!c) return;
-      if (sess.engine === 'ivtp') { c.mouseButtons(x, y, m); return; }
+      if (typeof c.mouseButtons === 'function') { c.mouseButtons(x, y, m); return; }
       c.buttonState(x, y, m);
     },
     subscribe(cb) { sess.listeners.add(cb); },
@@ -146,46 +150,40 @@ async function cachedSession(cfg) {
 async function startSession(sess, host, user, pass, port, secure) {
   // креды держим в памяти сессии — авто-реконнект поднимает то же подключение
   sess.creds = { host, user, pass, port, secure };
-  const cfg = await cachedSession({ host, username: user, password: pass, port, secure });
-  // S4 (AMI/IVTP): getSession вернул kvmtoken+webcookie — консоль другим
-  // движком (CONNECT-туннель на web-порт), не Mahogany-AVR.
-  if (cfg.s4Sid) {
-    const cli = new IvtpClient({ ...cfg, host, username: user }, {
+  const conn = { host, username: user, password: pass, port, secure };
+  // Плагинная платформа: ядро не знает моделей — спрашивает реестр (пробинг).
+  let plat = null;
+  try { plat = await matchPlatform(conn, SDK); }
+  catch (e) { if (process.env.IRMC_DEBUG === '1') console.log('[platforms] probe:', e.message); }
+  if (plat && plat.impl && typeof plat.impl.createConsole === 'function') {
+    const sessionCfg = await plat.impl.login(conn, SDK);
+    const cli = plat.impl.createConsole(sessionCfg, {
       onStatus: (s) => {
         sess.status.push(s);
-        if (process.env.IRMC_DEBUG === '1') console.log('[ivtp]', s);
-        if (s === 'session:valid') { sess.state = 'live'; sess._retryN = 0; }
-        if (s.startsWith('vesa:')) {
-          const m = /^vesa:(\d+)x(\d+)@(\d+)/.exec(s);
-          if (m) { sess.width = +m[1]; sess.height = +m[2]; }
-        }
+        if (process.env.IRMC_DEBUG === '1') console.log(`[${plat.manifest.id}]`, s);
+        if (s === 'live') { sess.state = 'live'; sess._retryN = 0; }
       },
-      onError: (e) => { sess.error = e; sess.state = 'error'; if (process.env.IRMC_DEBUG === '1') console.log('[ivtp] ERR:', e); scheduleReconnect(sess); },
-      onExit: () => { sess.state = 'closed'; if (process.env.IRMC_DEBUG === '1') console.log('[ivtp] exit'); scheduleReconnect(sess); },
-      onFrame: (fb) => {
+      onError: (e) => { sess.error = e; sess.state = 'error'; if (process.env.IRMC_DEBUG === '1') console.log(`[${plat.manifest.id}] ERR:`, e); scheduleReconnect(sess); },
+      onExit: () => { sess.state = 'closed'; if (process.env.IRMC_DEBUG === '1') console.log(`[${plat.manifest.id}] exit`); scheduleReconnect(sess); },
+      onFrame: (fb, rects) => {
         sess.width = fb.width; sess.height = fb.height;
         sess.lastFrameAt = Date.now();
-        // vnc.js шлёт клиенту только то, что перечислено в rects: IVTP-кадр —
-        // всегда полный экран (частичности собираются фрагментами внутри
-        // кадра), отдаём full-screen rect. null vnc.js молча пропускал —
-        // «подключено, но изображения нет».
-        if (fb.width > 0 && fb.height > 0) {
-          const full = [{ x: 0, y: 0, w: fb.width, h: fb.height }];
-          for (const cb of sess.listeners) cb(fb, full);
-        }
+        const rs = (rects && rects.length) ? rects : [{ x: 0, y: 0, w: fb.width, h: fb.height }];
+        if (fb.width > 0 && fb.height > 0) for (const cb of sess.listeners) cb(fb, rs);
       },
-    });
+    }, SDK);
     sess.cli = cli;
-    sess.engine = 'ivtp';
+    sess.engine = plat.manifest.id;
     await cli.start();
-    // Keyframe: [11] просит BMC переслать полный экран (статика/бланк молчат),
-    // forceFull() гарантирует full-repaint браузерам — чинит выпавшие куски
-    // и «чёрный экран» подключённых noVNC-клиентов.
+    // Keyframe: просим BMC переслать полный экран (статика/бланк молчат),
+    // forceFull() гарантирует full-repaint браузерам.
     sess._keyframe = setInterval(() => {
-      try { sess.cli?.invalidateFull(); sess.forceFull(); } catch {}
+      try { sess.cli?.invalidateFull?.(); sess.forceFull(); } catch {}
     }, 10000);
     return sess;
   }
+  // S2 (Avocent/Mahogany): пока не оформлен модулем — старый путь ядра.
+  const cfg = await cachedSession(conn);
   const cli = new IrmcClient(cfg, {
     onStatus: (s) => {
       sess.status.push(s);
@@ -754,7 +752,8 @@ const server = http.createServer(async (req, res) => {
   function kvmClientForHost(host) {
     const tok = sessionsByHost.get(host);
     const s = tok ? sessions.get(tok) : null;
-    return (s && s.engine === 'ivtp' && s.cli) ? s.cli : null;
+    // Платформенно-независимо: нужен клиент, умеющий MediaRedirectionState [24]
+    return (s && s.cli && typeof s.cli.mediaRedir === 'function') ? s.cli : null;
   }
   async function realMount(srv, isoId) {
     let cfg;
@@ -764,22 +763,15 @@ const server = http.createServer(async (req, res) => {
     const pass = cfg.password || '';
     const port = Number(cfg.port || srv.port || 80);
     const secure = !!cfg.secure || !!srv.secure;
-    const ses = await cachedSession({ host, username: user, password: pass, port, secure });
-    if (ses.s4Sid) {
-      // S4: HTTP-Connect CDMEDIA + IUSB-SCSI
+    const conn = { host, username: user, password: pass, port, secure };
+    // Плагин решает, как монтировать (createMedia). Нет модуля — S2 legacy (m2).
+    let plat = null;
+    try { plat = await matchPlatform(conn, SDK); }
+    catch (e) { if (process.env.IRMC_DEBUG === '1') console.log('[platforms] probe:', e.message); }
+    if (plat && plat.impl && typeof plat.impl.createMedia === 'function') {
+      const sessionCfg = await plat.impl.login(conn, SDK);
       if (activeCmdir) { try { activeCmdir.close(); } catch {} activeCmdir = null; }
-      const c = new S4Cmdir({
-        host, username: user,
-        kvmtoken: ses.kvmtoken || '', webcookie: ses.webcookie || '',
-        kvmPort: ses.kvmPort || 80, kvmSecure: !!ses.kvmSecure,
-        webSecurePort: ses.webSecurePort || 443,
-        isoPath: iso.isoPath(isoId), cdnum: 0,
-      }, {
-        onStatus: (s) => { if (process.env.IRMC_DEBUG === '1') console.log('[cdmedia]', s); },
-        onError: (e) => { if (process.env.IRMC_DEBUG === '1') console.log('[cdmedia] ERR:', e); },
-        onExit: () => { if (process.env.IRMC_DEBUG === '1') console.log('[cdmedia] exit'); },
-        onRaw: (f) => { if (process.env.IRMC_DEBUG === '1') console.log('[cdmedia] rx', f.length, f.toString('hex')); },
-      });
+      const c = plat.impl.createMedia(sessionCfg, { isoPath: iso.isoPath(isoId) }, SDK);
       activeCmdir = c;
       await c.start();
       // [24]=1: сообщить BMC о старте media-redirection (KVM-канал)

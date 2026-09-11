@@ -1162,3 +1162,22 @@ s4Sid -> S4Cmdir; S2 -> m2). Статус: работает, CD-ROM виден.
 Проверено: node server/sdk/registry.js находит 2 модуля, сортирует, пропускает
 _template. index.md обновлён. Код ядра пока не тронут (миграция следующими
 шагами).
+
+## [2026-09-11] ingest | S4 оформлен модулем платформы (ami-soc)
+Перенос S4 в плагинную архитектуру:
+- server/console-ivtp.js и server/s4cmdir.js перемещены в
+  server/platforms/ami-soc/ (весь платформенный код S4 — в папке).
+- Создан platforms/ami-soc/{index.js,probe.js,login.js}: probe по подписи
+  веб-сервера (Server: FUJITSU ServerView iRMC S4 Webserver → matched),
+  login (переиспользует s4Session), createConsole (IvtpClient),
+  createMedia (S4Cmdir).
+- Ядро index.js теперь спрашивает реестр: matchPlatform(conn) -> plugin.login
+  -> createConsole/createMedia. S4-ветки (if cfg.s4Sid, IvtpClient/S4Cmdir)
+  из ядра убраны. Диспетчер ввода/fb переведён с engine==='ivtp' на проверку
+  возможностей клиента (keyEvent/mouseAbs/getRGB) — платформенно-нейтрально.
+- discover.js: S4-вход выделен в экспорт s4Session (используют и ядро, и
+  модуль — без дублирования).
+- S2 пока по старому пути ядра (следующий шаг — модуль mahogany-avr).
+Проверено: реестр находит ami-soc impl=yes; проба на 042 даёт matched
+(Server: ...iRMC S4...); npm test 29 pass/1 skip; импорт сервера ок.
+Ждём проверки на живом 042 (консоль + ISO) и S2.

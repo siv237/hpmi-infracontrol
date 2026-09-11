@@ -207,39 +207,8 @@ export async function getSession(cfg) {
   let link = /href="(avr\.jnlp\?[^"]+)"/i.exec(root.body);
   // S2-путь не сработал (страница-триггер вместо контента) — пробуем S4.
   if (!link && /Login required/i.test(root.body || '')) {
-    const s4 = await s4Login(secure, host, port, username, password);
-    if (s4) {
-      const page = await get(secure, host, port, s4.pagePath, { 'User-Agent': 'Mozilla/5.0' });
-      link = /href="(avr\.jnlp\?[^"]+)"/i.exec(page.body || '');
-      if (link) {
-        const j = await get(secure, host, port, '/' + link[1].replace(/&amp;/g, '&'), { 'User-Agent': 'Mozilla/5.0' });
-        const argsS4 = {};
-        // S4-аргументы идут ПАРАМИ: <argument>-kvmtoken</argument><argument>VAL</argument>
-        const argv = [];
-        const reA = /<argument>([^<]*)<\/argument>/g;
-        let mA;
-        while ((mA = reA.exec(j.body || ''))) argv.push(mA[1].trim());
-        for (let i = 0; i + 1 < argv.length; i += 2) {
-          const k = argv[i].replace(/^-/, '');
-          argsS4[k] = argv[i + 1];
-        }
-        console.log('[s4] сессия ок, sid:', s4.sid.slice(0, 6) + '…');
-        return {
-          host, username,
-          // S4-консоль: CONNECT-туннель на web-порт (kvmport), не VncPort
-          port: Number(argsS4.kvmport || port) || port,
-          secure: !!Number(argsS4.kvmsecure || 0),
-          kvmPort: Number(argsS4.kvmport || port) || port,
-          kvmSecure: !!Number(argsS4.kvmsecure || 0),
-          webSecurePort: Number(argsS4.websecureport || 443) || 443,
-          kvmtoken: argsS4.kvmtoken || '',
-          webcookie: argsS4.webcookie || '',
-          httpdata: '', digest: '',
-          s4Sid: s4.sid, // метка S4-сессии
-        };
-      }
-      throw new Error('S4: вход прошёл, но avr.jnlp на странице не найден');
-    }
+    const s4 = await s4Session(cfg);
+    if (s4) return s4;
   }
   if (!link) throw new Error('no avr.jnlp link in page');
   const j = await digestGet(secure, host, port, '/' + link[1].replace(/&amp;/g, '&'), username, password);
@@ -257,6 +226,43 @@ export async function getSession(cfg) {
     secure: false, // sessiontype=kvm -> plain
     httpdata: args.httpdata || '',
     digest: args.digest || '',
+  };
+}
+
+// S4-вход (AMI/SOC): триггер → Digest-POST → sid → avr.jnlp → параметры сессии.
+// Возвращает sessionCfg S4 или null (не S4 / вход не удался). Используется
+// ядром (getSession) И модулем платформы ami-soc (login()).
+export async function s4Session(cfg) {
+  const { host, username, password, port = 80, secure = false } = cfg;
+  const s4 = await s4Login(secure, host, port, username, password);
+  if (!s4) return null;
+  const page = await get(secure, host, port, s4.pagePath, { 'User-Agent': 'Mozilla/5.0' });
+  const link = /href="(avr\.jnlp\?[^"]+)"/i.exec(page.body || '');
+  if (!link) throw new Error('S4: вход прошёл, но avr.jnlp на странице не найден');
+  const j = await get(secure, host, port, '/' + link[1].replace(/&amp;/g, '&'), { 'User-Agent': 'Mozilla/5.0' });
+  const argsS4 = {};
+  // S4-аргументы идут ПАРАМИ: <argument>-kvmtoken</argument><argument>VAL</argument>
+  const argv = [];
+  const reA = /<argument>([^<]*)<\/argument>/g;
+  let mA;
+  while ((mA = reA.exec(j.body || ''))) argv.push(mA[1].trim());
+  for (let i = 0; i + 1 < argv.length; i += 2) {
+    const k = argv[i].replace(/^-/, '');
+    argsS4[k] = argv[i + 1];
+  }
+  console.log('[s4] сессия ок, sid:', s4.sid.slice(0, 6) + '…');
+  return {
+    host, username,
+    // S4-консоль: CONNECT-туннель на web-порт (kvmport), не VncPort
+    port: Number(argsS4.kvmport || port) || port,
+    secure: !!Number(argsS4.kvmsecure || 0),
+    kvmPort: Number(argsS4.kvmport || port) || port,
+    kvmSecure: !!Number(argsS4.kvmsecure || 0),
+    webSecurePort: Number(argsS4.websecureport || 443) || 443,
+    kvmtoken: argsS4.kvmtoken || '',
+    webcookie: argsS4.webcookie || '',
+    httpdata: '', digest: '',
+    s4Sid: s4.sid, // метка S4-сессии
   };
 }
 

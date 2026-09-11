@@ -1,14 +1,18 @@
 # Модуль платформы: ami-soc (Fujitsu iRMC S4, AMI/SOC)
 
-Статус: **заготовка**. Код переносится по живому железу из текущих модулей ядра.
+Статус: **реализован** (контракты probe/login/createConsole/createMedia).
+Код перенесён из ядра; ядро использует модуль через реестр.
 
-## Что перенести (карта)
+## Файлы модуля
 
-| Сейчас (ядро) | Сюда |
-|---------------|------|
-| `server/console-ivtp.js` | консоль IVTP (ConsoleClient) |
-| `server/s4cmdir.js` | VirtualMedia CDMEDIA/IUSB (MediaRedirector) |
-| `discover.js` (s4Login / jnlp-args) | `login()` и пробы |
+| Файл | Роль |
+|------|------|
+| `manifest.js` | supported/access/capabilities/probes |
+| `probe.js` | проба `web-signature` (Server: iRMC S4) |
+| `login.js` | схема входа S4 (переиспользует `s4Session` из ядра) |
+| `console-ivtp.js` | консоль IVTP (ConsoleClient) |
+| `s4cmdir.js` | VirtualMedia CDMEDIA/IUSB (MediaRedirector) |
+| `index.js` | сборка контрактов для ядра |
 
 ## Проверено на живом железе
 
