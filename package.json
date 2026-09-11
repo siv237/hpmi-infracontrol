@@ -2,6 +2,7 @@
   "name": "irmc-viewer",
   "version": "0.1.0",
   "description": "Web-based viewer for Fujitsu iRMC Advanced Video Redirection (Mahogany protocol). Bridges iRMC KVM to VNC/RFB over WebSocket (noVNC).",
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "main": "server/index.js",
   "scripts": {

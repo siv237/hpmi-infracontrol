@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { IrmcClient, testIrmc } from './irmc.js';
-import { IvtpClient } from './console-ivtp.js';
+import { IvtpClient } from './platforms/ami-soc/console-ivtp.js';
 import * as ipmi from './ipmi.js';
 import * as db from './db.js';
 import { checkChannels, ping as pingChannel, tcpPort } from './channels.js';
@@ -26,7 +26,7 @@ import { attachVnc } from './vnc.js';
 import { encodePng, saveScreenshot } from './png.js';
 import * as iso from './iso.js';
 import * as m2 from './m2.js';
-import { S4Cmdir } from './s4cmdir.js';
+import { S4Cmdir } from './platforms/ami-soc/s4cmdir.js';
 
 const PORT = Number(process.env.PORT || 1845);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -440,7 +440,9 @@ const server = http.createServer(async (req, res) => {
     // которого у IvtpFramebuffer нет → снимок S4 всегда был пустым.
     const d = s.fb();
     const rgb = d.pix || new Uint32Array(0);
-    const file = saveScreenshot('console', d.width, d.height, rgb);
+    // Файл на диск — ТОЛЬКО в debug-режиме (без IRMC_DEBUG не пишем ничего:
+    // постоянные скриншоты в screenshots/ не нужны в обычной работе).
+    const file = process.env.IRMC_DEBUG === '1' ? saveScreenshot('console', d.width, d.height, rgb) : null;
     const png = encodePng(d.width, d.height, rgb);
     return json(res, 200, {
       ok: true, width: d.width, height: d.height,
