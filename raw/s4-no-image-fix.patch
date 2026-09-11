@@ -1,0 +1,125 @@
+diff --git a/server/console-ivtp.js b/server/console-ivtp.js
+index cde89c8..ae87de0 100644
+--- a/server/console-ivtp.js
++++ b/server/console-ivtp.js
+@@ -36,7 +36,7 @@ const IVTP = {
+   HID: 1, PAUSE: 4, RESUME: 6, STOP_IMMEDIATE: 8, GET_FULL_SCREEN: 11,
+   VALIDATE_VIDEO_SESSION: 18, VALIDATE_VIDEO_SESSION_RESPONSE: 19,
+   GET_KEYBD_LED: 20, GET_WEB_TOKEN: 21, VIDEO_FRAGMENT: 25,
+-  POWER_STATUS: 34, KVM_DISCONNECT: 54,
++  POWER_STATUS: 34, KVM_DISCONNECT: 54, BLANK_SCREEN: 9,
+ };
+ 
+ function ivtpHdr(type, size, status = 0) {
+@@ -337,14 +337,18 @@ export class IvtpClient {
+     const w = Math.min(resX, this.fb.width), h = Math.min(resY, this.fb.height);
+     if (w <= 0 || h <= 0) return;
+     const px = this.fb.pix;
++    // Инвариант проекта (как у S2 IrmcFramebuffer): pix = 0x00RRGGBB.
++    // На LE-хосте это байты B,G,R,0 — ровно то, что ждёт fast-path vnc.js
++    // (noVNC blitImage → _bgrxImage) и png.encodePng. Прежний формат
++    // 0xFFBBGGRR давал перепутанные R/B в RFB и ломал /api/snapshot.
+     if (bytesPP === 4 || bytesPP === 3) {
+-      const off = bytesPP === 3 ? 1 : 0; // 4bpp: BGRA -> LE-порядок; 3bpp: RGB
++      const off = bytesPP === 3 ? 1 : 0; // 4bpp: BGRA-порядок; 3bpp: RGB
+       for (let y = 0; y < h; y++) {
+         for (let x = 0; x < w; x++) {
+           const i = (y * resX + x);
+           const j = i * (bytesPP === 3 ? 3 : 4) + off;
+           const b = pixels[j] | 0, g = pixels[j + 1] | 0, r = pixels[j + 2] | 0;
+-          px[y * w + x] = 0xff000000 | (b << 16) | (g << 8) | r;
++          px[y * w + x] = (r << 16) | (g << 8) | b;
+         }
+       }
+     } else if (bytesPP === 2) {
+@@ -352,14 +356,14 @@ export class IvtpClient {
+         for (let x = 0; x < w; x++) {
+           const v = pixels.readUInt16LE((y * resX + x) * 2);
+           const r = (v & 0xf800) >>> 8, g = (v & 0x07e0) >>> 3, b = (v & 0x1f) << 3;
+-          px[y * w + x] = 0xff000000 | (b << 16) | (g << 8) | r;
++          px[y * w + x] = (r << 16) | (g << 8) | b;
+         }
+       }
+     } else if (bytesPP === 1) {
+       for (let y = 0; y < h; y++) {
+         for (let x = 0; x < w; x++) {
+           const v = pixels[y * resX + x] | 0;
+-          px[y * w + x] = 0xff000000 | (v << 16) | (v << 8) | v;
++          px[y * w + x] = (v << 16) | (v << 8) | v;
+         }
+       }
+     }
+diff --git a/server/index.js b/server/index.js
+index f7431d8..15bd9cc 100644
+--- a/server/index.js
++++ b/server/index.js
+@@ -159,14 +159,27 @@ async function startSession(sess, host, user, pass, port, secure) {
+       onFrame: (fb) => {
+         sess.width = fb.width; sess.height = fb.height;
+         sess.lastFrameAt = Date.now();
+-        for (const cb of sess.listeners) cb(fb, null);
++        // ВАЖНО: vnc.js шлёт клиенту только то, что перечислено в rects.
++        // IVTP-кадр — всегда полный экран (частичности приходят фрагментами
++        // внутри одного кадра), поэтому отдаём full-screen rect. Раньше тут
++        // был null — vnc.js молча пропускал ВСЕ кадры S4 → «подключено, но
++        // изображения нет» (на S2 декодер отдаёт реальные rects — там ок).
++        if (fb.width > 0 && fb.height > 0) {
++          const full = [{ x: 0, y: 0, w: fb.width, h: fb.height }];
++          for (const cb of sess.listeners) cb(fb, full);
++        }
+       },
+     });
+     sess.cli = cli;
+     sess.engine = 'ivtp';
+     await cli.start();
++    // Keyframe: [11] просит BMC переслать полный экран (статика/бланк молчат),
++    // а forceFull() гарантирует, что браузер получит full-repaint — чинит
++    // выпавшие куски и «чёрный экран» у уже подключённых noVNC-клиентов
++    // (в S2-ветке делалось, в S4-ветке forceFull был пропущен — кадры от
++    // invalidateFull до браузера не доходили вовсе).
+     sess._keyframe = setInterval(() => {
+-      try { sess.cli?.invalidateFull(); } catch {}
++      try { sess.cli?.invalidateFull(); sess.forceFull(); } catch {}
+     }, 10000);
+     return sess;
+   }
+@@ -419,12 +432,15 @@ const server = http.createServer(async (req, res) => {
+     const token = decodeURIComponent(url.pathname.slice('/api/snapshot/'.length));
+     const s = sessions.get(token);
+     if (!s || !s.cli) return json(res, 404, { ok: false, error: 'no session' });
+-    const fb = s.cli.fb;
+-    const rgb = (fb && fb.getRGB ? fb.getRGB() : new Uint32Array(0));
+-    const file = saveScreenshot('console', fb.width, fb.height, rgb);
+-    const png = encodePng(fb.width, fb.height, rgb);
++    // Единый путь через sess.fb(): S2 — getRGB() (палитра→0x00RRGGBB),
++    // S4/IVTP — pix напрямую (уже 0x00RRGGBB). Раньше брали s.cli.fb.getRGB,
++    // которого у IvtpFramebuffer нет → снимок S4 всегда был пустым.
++    const d = s.fb();
++    const rgb = d.pix || new Uint32Array(0);
++    const file = saveScreenshot('console', d.width, d.height, rgb);
++    const png = encodePng(d.width, d.height, rgb);
+     return json(res, 200, {
+-      ok: true, width: fb.width, height: fb.height,
++      ok: true, width: d.width, height: d.height,
+       png: png ? 'data:image/png;base64,' + png.toString('base64') : null,
+       saved: file || null,
+     });
+diff --git a/server/vnc.js b/server/vnc.js
+index 91e1fab..642609c 100644
+--- a/server/vnc.js
++++ b/server/vnc.js
+@@ -147,9 +147,13 @@ export function attachVnc(ws, sess) {
+     // once numRects >= 2).
+     let numRects = rs.length;
+     const leads = [];
+-    if (sentW !== 0 && (w !== sentW || h !== sentH)) {
++    if (w !== sentW || h !== sentH) {
+       // Resolution change: prepend a DesktopSize pseudo-rect so noVNC resizes
+       // its display and rescales (keeps aspect ratio inside its window).
++      // ВАЖНО: без условия sentW!==0 — если WS-клиент подключился ДО первого
++      // IVTP-кадра, ServerInit ушёл с 0x0 (canvas noVNC 0x0), и БЕЗ
++      // DesktopSize первый реальный кадр рендерился в нулевой canvas
++      // (невидим) → «подключено, но изображения нет».
+       const ds = Buffer.alloc(12);
+       ds.writeUInt16BE(0, 0);
+       ds.writeUInt16BE(0, 2);
