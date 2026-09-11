@@ -372,3 +372,211 @@ CAPACITY) → 51(READ DISC INF)×2 → 52(READ TRACK)×2 → 43 02 aa → 03(REQ
 /deleting неверного `00 00 05 00 20 00 00 00`. sr1 без M2 пока не извлекается —
 требуется полный стартовый батч (881 Б) + второй канал с `f2 01 …`-подтверждением
 (см. открытые вопросы). Вывод в прод не сделан.
+
+---
+
+## S4 (AMI/SOC) — другой механизм, НЕ Avocent-URS
+
+**ВАЖНО (11.09): всё выше про M2/URS/LIBM2 относится ТОЛЬКО к S2 (Avocent/
+Mahogany).** iRMC S4 (042, Fw~7.69F, архитектура AMI) хранение ISO делает
+СОВЕРШЕННО иначе — и наш движок `server/m2.js` для него БЕСПОЛЕЗЕН.
+
+### Подтверждение несовместимости (живой тест на 042 vs S2 10.67.17.101)
+| Проверка | S2 | S4 (042) |
+|---|---|---|
+| URS-signature `d2 02 00 01 00 01 cd 37` (raw TCP :80) | `Fujitsu \n` | **таймаут** |
+| `m2.share()` | `code:0` + 1.08 МБ прочитано | «тишина»: `code:null`, bytes застыл на 10588, bps=0 |
+| storage-порты 5900/5901/5120/5121 | есть | **нет** (только 80/443/623/22) |
+| Redfish `/redfish/v1` (443 и 80) | — | не отдаёт (445/000) |
+
+Винконсоль 042: CD/ROM не появился (владелец смотрит снимок; только C: и D:).
+
+### S4-jnlp отдаёт для VirtualMedia (из avr.jnlp 042)
+```
+vmsecure=0, cdstate=1, cdnum=2, fdstate=1, hdstate=1, hdnum=1,
+kvmport=80, websecureport=443, singleportenabled=1, kvmtoken, webcookie
+```
+**НЕ отдаёт** StoragePort/VncPort (как S2). Аргументы идут ПАРАМИ
+(`<argument>-kvmtoken</argument>` + значение), не `key=value`.
+
+### Транспорт: тот же HTTP-Connect туннель, что и KVM (`SinglePortKVM`)
+`singleportenabled=1` → редирект идёт через `setHTTPConnect("CDMEDIA")`:
+```
+CONNECT <host>:443 HTTP/1.1\n cookie <webcookie>\r\n\r\n     (или HTTPS/1.1 если ssl)
+JVIEWER CDMEDIA cookie <webcookie>\r\n\r\n
+→ HTTP/1.1 200 OK → далее бинарный IUSB
+```
+(`doTunnelHandshake` → `FormHttpRequest` = `"CONNECT" + host + ":" + port +
+" HTTP/1.1\n cookie " + webcookie`; второй запрос `"JVIEWER " + Service("CDMEDIA")
++ " cookie " + webcookie`.) Отключение: `JVIEWER DISCONNECT Cookie <webcookie>`.
+
+### Авторизация сессии — `SendAuth_SessionToken` (CDROMRedir::startRedirection)
+Сразу после connect шлётся IUSB-пакет: `IUSBHeader(n)` где
+- `n=128` (sessionTokenType==0 — дефолт S4 042) → limit 160
+- `n=240` (sessionTokenType==1) → limit 272
+```
+IUSBHeader.write(): сперва header (см. ниже), затем:
+  position(41) -> 0xF2 (-14)      [внутри data]
+  position(62) -> 0x00            [начало sessionToken]
+  position(62) -> token.getBytes()
+  position(23) -> deviceNo (CDDevice_no)
+```
+Токен передаётся в `StartCDROMRedir(...string3...)` — это **отдельный
+сессионный токен** (не webcookie; на S4 = kvmtoken/webcookie из jnlp,
+`getSessionTokenType()` отличает). Точная связка на 042 не добита.
+
+### Заголовок пакета `IUSBHeader` (8+24 = 32 байта)
+```
+[0..7]   "IUSB    " (signature, 8 байт)
+[8]      major = 1
+[9]      minor = 0
+[10]     packetHeaderLen = 32
+[11]     headerChecksum  (= -сумма всех байт limit, по mod 256; get(11) при write)
+[12..15] dataPacketLen (int; в receivePacket читается как getInt на offset 12)
+[16]     serverCaps
+[17]     deviceType (5 = CDROM)
+[18]     protocol (1)
+[19]     direction (128)
+[20]     deviceNumber
+[21]     interfaceNumber (0)
+[22]     clientData
+[23]     Instance (= CDDevice_no)
+[24..27] sequenceNumber (int)
+[28..31] reserved[4]
+```
+`createCDROMHeader(n)`: deviceType=5, protocol=1, direction=128, serverCaps=0.
+Header ровно **32 байта**; чекист-байт пересчитывается при write.
+
+### Общий кадр / реасемблинг (`PacketMaster.receivePacket`)
+Каждое сообщение = `header(32) + data(dataPacketLen-байт)`. Парсер сначала
+читает ровно 32 байта, извлекает `dataPacketLen` из offset 12, читает ещё
+`dataPacketLen` байт, кладёт после header. `wrap/put32` — LE (буферам задан
+`ByteOrder.LITTLE_ENDIAN`).
+
+### Пакет SCSI `IUSBSCSI` (`com/ami/iusb/protocol/IUSBSCSI`)
+Extends RedirPacket; `IUSB_SCSI_PKT_SIZE=62`, `WITHOUT_HEADER=30`.
+```
+read data (после header): 
+  [data 9]  opcode (0xF1=241 connect-ответ, 0xF6=246 KILL_REDIR, 0x1B=27 EJECT)
+  [data 13] Lba
+  [data 30] connectionStatus — ТОЛЬКО если opcode==241 && dataLen>30:
+               1 = OK (можно редиректить)
+               5 = уже подключено к др. машине
+               8 = занято
+  [data 31..54] m_otherIP (24 байта ASCII, trim) — чужой IP при отказе
+```
+Опкоды (константы): `OPCODE_EJECT=27`, `OPCODE_KILL_REDIR=246`.
+
+### Команды SCSI (`CDImage.executeSCSICmd`, opcodes)
+```
+0   = TEST UNIT READY   -> status 0
+37  = READ CAPACITY     -> dataLen 8:  (totalSectors-1) BE + blockSize(2048) BE
+40  = READ(10)          -> lba, len=Cmd10.getLength(); читает len*2048 байт
+168 = READ(12)          -> len=Cmd12.getLength32()
+67  = READ TOC/PMA      -> 20-байтный TOC (аналог S2), длина = min(len, dataLen)
+27  = START/STOP (EJECT)
+30  = MEDIUM REMOVAL
+```
+`readCDImage(lba, n)` = `seek(2048*lba)` + `read(2048*n)` — побайтная копия ISO,
+как S2 (игнор одного хвостового 0-сектора). LBA/длины в big-endian
+(`mac2blong`/`mac2bshort` байт-своп).
+
+### Ответный кадр / layout (CDImage + CDROMRedir.run)
+Ответ формируется в `packetWriteBuffer` (LE, capacity 131134):
+```
+[53]  overallStatus (0=ok; 1+ = sense)
+[54]  senseKey
+[55]  senseCode
+[56]  senseCodeQ
+[57..60]  результат: для READ CAPACITY put(57,8); для READ(10)/READ(12) —
+          putInt(57, byArray.length)
+[61..]    данные (для READ CAPACITY: totalSectors-1 + blockSize; для READ: блоки;
+          для TOC: 20-байтный append)
+limit = dataLen + 61; position(61); кладём данные.
+```
+`n2 = getDataLength() + 61`; `packetWriteBuffer.limit(n2)`; затем
+`new IUSBSCSI(packetWriteBuffer, true)` — `writePacket`: шлёт header(32) с
+`direction=128`, limit=`dataLen+32`, position=limit, и НЕ кладёт отдельный data
+(предзаполнен). Отправка `packetMaster.sendPacket()`.
+
+### Ключевые поля layout IUSBSCSIPacket (обёртка вокруг header, другое)
+В `com/ami/kvm/imageredir/IUSBSCSIPacket` (разбор запроса, rewind после header):
+```
+header(32) | readLen(1) | tagNo(1) | dataDir(1) | commandPkt | statusPkt(4) | dataLen(4)
+commandPkt: opCode(1) lun(1) lba(4) [+ Cmd10: reserved6(1) length(2) reserved9(9)]
+                      |          |   [+ Cmd12: length32(4) reserved10(8)]
+```
+`SCSICommandPacket` соответствует SCSI CDB; ответ — статус 4 байта.
+
+### Незакрытые вопросы (нужен захват реального CDMEDIA-туннеля)
+- Точные смещения ответного кадра на проводе (framing `[32..61]`, куда встаёт
+  header/readLen/tagNo/dir/command/status/dataLen поверх IUSBSCSI) — есть риск
+  расхождения декомпиляции и реального потока (как было в S2 с magic 00 80/00 90).
+- Связка `sessionToken` <-> `webcookie`/`kvmtoken` и значение `getSessionTokenType()`
+  на конкретном iRMC.
+- План: захват реального CDMEDIA-потока от оригинального JViewer-SOC_S4 к 042
+  (LD_PRELOAD/tcpdump, как в S2), сверить байты, затем писать `server/s4cmdir.js`
+  (Node-реализация HTTP-Connect CDMEDIA + IUSB-SCSI-респондер).
+
+### ✅ РАБОТАЕТ: S4 CDMEDIA реализован и подтверждён (11.09, 042)
+`server/s4cmdir.js` (класс S4Cmdir) — реализован и проверен на живом 042:
+CD-ROM появился в винконсоли (владелец подтвердил). Обмен:
+TUR(0)/READ CAPACITY(0x25=37)/READ(10)(0x28=40), nBytes растёт (N×2048).
+
+#### Транспорт (singleport, как KVM)
+```
+CONNECT <host>:443 HTTP/1.1\n cookie <webcookie>\r\n\r\n
+JVIEWER CDMEDIA cookie <webcookie>\r\n\r\n  -> HTTP/1.1 200 OK
+```
+(webSecurePort=443 — цель CONNECT; сам сокет на kvmPort=80/web-port.)
+
+#### Auth (SendAuth_SessionToken) — НАЙДЕНО КЛЮЧЕВОЕ
+- Кадр **160 байт**: IUSBHeader(32) + data(128); dataPacketLen в header=128;
+  header.Instance@23 = CDDevice_no; direction=128.
+- Опкод auth = **0xF2** на data[9] (т.е. offset 41 в кадре).
+- Маркер 0x00 на data[30] (offset 62); **токен кладётся с data[31] = offset 63**
+  (после `put((byte)0)` позиция сдвигается на 1). ⚠ ЕСЛИ токен с 62 -> BMC
+  отвечает **status=3** (отказ). С 63 -> **status=1** (session-ok).
+- Токен = **kvmToken** (m_session_token = encToken из `-kvmtoken`), НЕ webcookie.
+
+#### Формат кадра (LE; IUSBHeader 32б + data(dataPacketLen))
+```
+[0..7]   "IUSB    "   [8]=major(1) [9]=minor(0) [10]=hdrLen(32) [11]=checksum
+[12..15] dataPacketLen (int LE)   [16]=serverCaps [17]=deviceType(5 CDROM)
+[18]=protocol(1) [19]=direction(128) [20]=devNum [21]=ifNum(0) [22]=clientData
+[23]=Instance(CDDevice_no) [24..27]=sequenceNumber [28..31]=reserved
+data-слой: opcode@data[9]  Lba@data[13]
+```
+
+#### SCSI (CDImage.executeSCSICmd, опкоды)
+```
+0   TUR            -> status 0
+37  READ CAPACITY  -> 8 байт: (totalSectors-1) BE + blockSize(2048) BE
+40  READ(10)       -> lba, len; читает len*2048 байт ISO (pобайтная копия)
+168 READ(12)       -> len32
+67  READ TOC
+27  START/STOP (EJECT)   246 KILL_REDIR
+```
+CDB для READ(10): op@cdb[0], lun@1, **lba@[2..5] BE**, Cmd10.reserved6@6,
+**length@[7..8] BE**; READ(12) — length32@[6..9].
+
+#### ОТВЕТНЫЙ КАДР (критично — НЕЛЬЗЯ слать СВОЙ header)
+Правильный ответ **зеркалит заголовок запроса** (sequence/instance/deviceType),
+затем поверх: status@53..56, результат-длина@57 (u32), данные@61; limit=dataLen+61.
+```
+[19]   = 0x80 (direction, форс IUSBSCSI.writePacket)
+[53]   overallStatus (0=ok)  [54] senseKey [55] senseCode [56] senseCodeQ
+[57..60] resultLen (READ CAP=8; READ=bytes)   [61..] данные (или 20-байт TOC)
+[12..15] dataPacketLen = dataLen+61 - 32
+```
+⚠ Именно отсутствие зеркалирования заголовка сигналит BMC повторить команду.
+
+#### Слоты virtual media
+BMC объявляет фиксированные слоты из jnlp: cdnum=2, fdnum=0, hdstate=1,
+hdnum=1. Винконсоль показывает их все (2 CD + 1 removable) — это НОРМА
+(незанятые слоты экспонируются BMC). Мы занимаем слот 0 (instance/CDDevice_no=0).
+
+#### Интеграция
+`server/index.js` realMount: `getSession()` -> есть `s4Sid` => S4Cmdir
+(HTTP-CONNECT CDMEDIA + IUSB-SCSI); иначе S2 => `m2.share` (Avocent-URS).
+Оба движка раздельные. `realUnmount` закрывает S4Cmdir + m2.unshare.

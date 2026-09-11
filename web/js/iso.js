@@ -116,7 +116,7 @@ function startStorageMetrics(m){
   const tick=()=>{ up.textContent=fmtDur(Date.now()-ts); };
   tick();
   if(storageTick){ clearInterval(storageTick); storageTick=null; }
-  const poll=async()=>{ try{ const j=await api('/api/mounts/stats'); if(j.ok&&j.stats){
+  const poll=async()=>{ try{ const j=await api('/api/mounts/stats',{_noKick:true}); if(j.ok&&j.stats){
     spd.textContent=(j.stats.bps/1048576).toFixed(2)+' МБ/с';
     bytes.textContent=fmtB(j.stats.bytes||0);
   } }catch{} };

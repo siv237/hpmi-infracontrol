@@ -1028,3 +1028,76 @@ IVTP. Мыш/клава параллельны с S2 (S2 key вызывает c.
 redShift/greenShift/blueShift клиента и его endianness (big/little),
 24bpp — отдельно. ДОБАВЛЕН DEBUG-лог [vnc] clientFmt (IRMC_DEBUG=1)
 для будущей диагностики пиксельных форматов. Подтверждено владельцем.
+
+## [2026-09-11] invest | ISO не монтируется на S4 (042) — движок не тот
+Симптом: в винконсоли 042 CD/ROM не появляется (владелец смотрит).
+Проверки на живой 042 (admin/routerT31x#####):
+- m2.share (Avocent-URS, из S2-jar) на 042:80 -> ok:true «тишина»,
+  сокет живёт, но bytes застыл на 10588, bps=0 — реальное чтение ISO
+  (pread) НЕ начинается. Контроль S2 10.67.17.101: share->code:0 и
+  +1.08 МБ — работает.
+- URS-signature d2 02 00 01 00 01 cd 37 голым TCP: S2 отвечает
+  «Fujitsu \n», 042 -> TIMEАУТ (вообще не отвечает).
+- Порты 042: только 80/443/623/22. НЕТ 5900/5901/5120/5121.
+- Redfish (443 и 80) -> 445/000: S4 его не отдаёт.
+ВЫВОД: 042 (iRMC S4, AMI/SOC) НЕ поддерживает Avocent-URS-storage с
+S2-jar. Движок server/m2.js (LIBM2-64.SO = Avocent/Mahogany URS,
+ScsiIsoStorageTarget) для S4 бесполезен.
+РЕМЕХАНИЗМ S4 (декопиляция JViewer.jar с 042, com/ami/iusb/*):
+- Редирект идёт по HTTP-Connect туннелю (singleportenabled=1), как KVM:
+  CONNECT <host>:<websecureport> HTTP/1.1\n cookie <webcookie>\r\n\r\n
+  затем «JVIEWER CDMEDIA cookie <webcookie>\r\n\r\n» -> HTTP/1.1 200 OK.
+  (SinglePortKVM.setHTTPConnect("CDMEDIA"), Service="CDMEDIA")
+- Авторизация сессии: SendAuth_SessionToken(token) — IUSBHeader с
+  sessionToken на offset 62, байт -14 на 41, deviceNo на 23; размер
+  header 128 (sessionTokenType=0) или 240 (=1). Это ОТДЕЛЬНЫЙ токен
+  (не webcookie), у S4 — kvmtoken/webcookie из avr.jnlp.
+- Протокол: IUSBHeader «IUSB    », major=1 minor=0, headerLen=32,
+  deviceType=5 (CDROM), protocol=1, direction=128, checksum@11,
+  возврат: connectionStatus 1=OK, 5=уже на машине, 8=занят;
+  m_otherIP показывает чужой IP при отказе. Классы: CDROMRedir,
+  IUSBRedirSession, CDImage, PacketMaster.connectVmedia/SSl.
+- jnlp S4 отдаёт: vmsecure=0, cdstate=1, cdnum=2, fdstate=1, hdstate=1,
+  hdnum=1, kvmport=80, websecureport=443, singleportenabled=1, kvmtoken,
+  webcookie, и НЕ даёт StoragePort/VncPort (в отличие от S2).
+Следующий шаг: для S4 писать НОВЫЙ storage-драйвер «CDMEDIA»
+(HTTP-Connect + IUSB-SCSI), не трогая m2.js (он остаётся для S2). Под
+N-реализацию нужно: точный формат IUSB-SCSI (IUSBSCSI/IUSSHeader) и
+CDImage->SCSI-команды (READ(10) и т.п.), плюс различие token
+(webcookie vs sessionToken) на 042 (sessionTokenType).
+
+## [2026-09-11] test | S4 CDMEDIA протокол ЗАРАБОТАЛ (живой 042)
+Написан ОТДЕЛЬНЫЙ модуль server/s4cmdir.js (S4/AMI CMDir, НЕ m2/URS).
+Живой тест 042: сессия принята (F1 connectionStatus=1), пошёл SCSI-обмен —
+TUR(0)/READ CAPACITY(0x25=37)/READ(10)(0x28=40), nBytes растёт (2048x сек.).
+Винконсоль: CD-ROM появился (владелец подтвердил: «2 CD + 1 removable» —
+это НОРМА: BMC объявляет cdnum=2, hdnum=1 из jnlp).
+Ключевые фиксы протокола:
+- SendAuth: кадр 160Б (header 32 + data 128, dataPacketLen=128), токен =
+  kvmToken (m_session_token/encToken), НЕ webcookie; маркер 0x00@62,
+  токен с offset **63** (после put((byte)0) позиция сдвигается); 0xF2@41.
+- Ответный кадр: ЗЕРКАЛИТ заголовок запроса (sequence/instance/deviceType)
+  + status@53..56 + dataLen@57 + данные@61; limit = dataLen+61;
+  direction=128; dataPacketLen = (dataLen+61)-32. Если слать СВОЙ header —
+  BMC не принимает (повторяет команду).
+- Опкод из data[9]; CDB для READ(10): lba@cdb[2..5], len@cdb[7..8].
+- Из-за неверного сдвига токена (62 vs 63) BMC отвечал status=3 (отказ);
+  сдвиг на 63 -> status=1 (session-ok).
+Транспорт: CONNECT host:webSecurePort(443) HTTP/1.1\n cookie <webcookie> +
+JVIEWER CDMEDIA cookie <webcookie> (singleport, прямо как KVM).
+Интеграция: server/index.js realMount теперь S4-осведомлён (getSession ->
+s4Sid -> S4Cmdir; S2 -> m2). Статус: работает, CD-ROM виден.
+
+## [2026-09-11] fix | S4 CD: пустые диски + петля логина в веб-UI
+Владелец: диски монтировались, но были пустые; параллельно не мог войти в
+веб-интерфейс (поле логина «само стиралось»).
+1) Пустой CD: в server/s4cmdir.js _handleScsi вызывал async _read() БЕЗ await
+   -> в ответ READ(10) уходил Promise (0 байт). READ CAPACITY синхронный,
+   потому проходил. Исправлено: _handleScsi async + await _read; обработка
+   кадров выстроена в promise-очередь (порядок ответов). Проверено: ответ
+   READ(10)=2109Б с реальным ISO (El Torito/GRUB/ISO9660/Windows), файлы видны.
+2) Петля логина: web/js/iso.js таймер каждые 2с звал /api/mounts/stats без
+   _noKick -> после рестарта сервера токен недействителен -> каждый 401 звал
+   showLogin(), который ОЧИЩАЛ поля ввода (буквы стирались, «страница
+   рефрешится»). Фикс: showLogin чистит поля только при первом показе;
+   опрос /api/mounts/stats с {_noKick:true}. Проверено владельцем.

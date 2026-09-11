@@ -26,6 +26,7 @@ import { attachVnc } from './vnc.js';
 import { encodePng, saveScreenshot } from './png.js';
 import * as iso from './iso.js';
 import * as m2 from './m2.js';
+import { S4Cmdir } from './s4cmdir.js';
 
 const PORT = Number(process.env.PORT || 1845);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -739,17 +740,44 @@ const server = http.createServer(async (req, res) => {
   }
 
   // === Монтирование ISO: состояние «что примонтировано» (п.10/10.5) ===
-  // Реальный проброс: движок M2 из легаси-jar (server/m2.js) — он сам
-  // соединяется с iRMC и отдаёт образ как SCSI CD. KVM-сессия для этого
-  // не нужна (в легаси Java команды 153/154 по KVM не шлёт вовсе).
-  function realMount(srv, isoId) {
+  // Реальный проброс ISO. S4 (AMI/IVTP) — СВОЙ движок CDMEDIA (s4cmdir.js);
+  // S2 (Avocent) — нативный M2 (m2.js). Никакого смешивания.
+  let activeCmdir = null; // активный S4 CD-редирект (один на процесс)
+  async function realMount(srv, isoId) {
+    let cfg;
+    try { cfg = await getServer(srv.id); } catch { cfg = srv; }
+    const host = cfg.host || srv.host;
+    const user = cfg.username || srv.usernamePlain || 'admin';
+    const pass = cfg.password || '';
+    const port = Number(cfg.port || srv.port || 80);
+    const secure = !!cfg.secure || !!srv.secure;
+    const ses = await cachedSession({ host, username: user, password: pass, port, secure });
+    if (ses.s4Sid) {
+      // S4: HTTP-Connect CDMEDIA + IUSB-SCSI
+      if (activeCmdir) { try { activeCmdir.close(); } catch {} activeCmdir = null; }
+      const c = new S4Cmdir({
+        host, username: user,
+        kvmtoken: ses.kvmtoken || '', webcookie: ses.webcookie || '',
+        kvmPort: ses.kvmPort || 80, kvmSecure: !!ses.kvmSecure,
+        webSecurePort: ses.webSecurePort || 443,
+        isoPath: iso.isoPath(isoId), cdnum: 0,
+      }, {
+        onStatus: (s) => { if (process.env.IRMC_DEBUG === '1') console.log('[cdmedia]', s); },
+        onError: (e) => { if (process.env.IRMC_DEBUG === '1') console.log('[cdmedia] ERR:', e); },
+        onExit: () => { if (process.env.IRMC_DEBUG === '1') console.log('[cdmedia] exit'); },
+        onRaw: (f) => { if (process.env.IRMC_DEBUG === '1') console.log('[cdmedia] rx', f.length, f.toString('hex')); },
+      });
+      activeCmdir = c;
+      try { await c.start(); return true; } catch (e) { activeCmdir = null; throw e; }
+    }
+    // S2: нативный Avocent-URS
     return m2.share({
-      host: srv.host,
-      port: srv.port || 80, // в легаси m_storagePort = HTTP-порт iRMC
+      host, port,
       sharePath: iso.isoPath(isoId),
     });
   }
   function realUnmount() {
+    if (activeCmdir) { try { activeCmdir.close(); } catch {} activeCmdir = null; }
     m2.unshare();
   }
   // Список монтирований (все серверы) — с именами серверов/образов

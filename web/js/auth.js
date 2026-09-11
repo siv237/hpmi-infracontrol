@@ -4,11 +4,18 @@
 
 // ---- авторизация: страница входа -----------------------------------------
 function showLogin(msg){
+  const lv=$('loginView');
+  const already=lv.classList.contains('show');
   $('l_err').style.display='none';
   if(msg){ const e=$('l_err'); e.textContent=msg; e.style.display='block'; }
-  $('loginView').classList.add('show');
-  $('l_login').value=''; $('l_password').value='';
-  setTimeout(()=>$('l_login').focus(),50);
+  lv.classList.add('show');
+  // Поля очищаем ТОЛЬКО при первом переходе на экран входа. Повторный
+  // showLogin (напр. фоновый опрос получил 401 после рестарта сервера) не
+  // должен стирать уже введённый логин/пароль.
+  if(!already){
+    $('l_login').value=''; $('l_password').value='';
+    setTimeout(()=>$('l_login').focus(),50);
+  }
 }
 function hideLogin(){ $('loginView').classList.remove('show'); }
 async function enterApp(user){
