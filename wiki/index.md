@@ -43,6 +43,11 @@ LLM Wiki проекта iRMC Viewer (этап 1). Страницы в `wiki/`, �
 - [knowledge/irmc-s4-ivtp.md](knowledge/irmc-s4-ivtp.md) — iRMC S4:
   веб-вход (Digest за формой, sid), KVM-консоль IVTP/AMI (CONNECT-
   туннель 443, kvmtoken, кадры RLE, HID-ввод), интеграция, грабли.
+- [knowledge/platform-module-manifesto.md](knowledge/platform-module-manifesto.md) —
+  манифест модульной архитектуры: как добавить платформу одной папкой
+  (`server/platforms/<id>/`), контракты ядра, канон пикселей, границы
+  «ядро ↔ модуль», чеклист. Каркас: `server/platforms/README.md`,
+  `server/sdk/` (contracts + registry).
 - [knowledge/server-deploy.md](knowledge/server-deploy.md) — ⚙ служебная
   (вне git): спецификация сервера деплоя (OS, сеть, репозитории, установленный
   софт, что ставит deploy.sh).
