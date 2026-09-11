@@ -41,6 +41,7 @@ const IVTP = {
   GET_USB_MOUSE_MODE: 10, GET_FULL_SCREEN: 11,
   VALIDATE_VIDEO_SESSION: 18, VALIDATE_VIDEO_SESSION_RESPONSE: 19,
   GET_KEYBD_LED: 20, GET_WEB_TOKEN: 21, SESSION_ACCEPTED: 23,
+  MEDIA_REDIR_STATE: 24,
   VIDEO_FRAGMENT: 25, SET_MOUSE_MODE: 28, POWER_STATUS: 34,
   CONF_SERVICE_STATUS: 37, MOUSE_MEDIA_INFO: 38, GET_ACTIVE_CLIENTS: 39,
   GET_USER_MACRO: 40, KVM_SHARING: 51, MEDIA_LICENSE_STATUS: 53,
@@ -648,6 +649,15 @@ export class IvtpClient {
   // ---- управление -----------------------------------------------------------
   invalidateFull() {
     if (this.state === 'live') this.sock?.write(ivtpHdr(IVTP.GET_FULL_SCREEN, 0));
+  }
+  // MediaRedirectionState (IVTP [24], status: 1=старт, 0=стоп). JViewer шлёт
+  // это по KVM-каналу при start/stop редиректа CD/FD/HD — BMC по нему
+  // подключает/отключает виртуальные устройства у гостя. Без [24]=0
+  // устройства остаются подключёнными («призраки») после отмонтирования.
+  mediaRedir(on) {
+    if (this.state !== 'live') return false;
+    this.sock?.write(ivtpHdr(IVTP.MEDIA_REDIR_STATE, 0, on ? 1 : 0));
+    return true;
   }
   close() {
     this._closed = true;

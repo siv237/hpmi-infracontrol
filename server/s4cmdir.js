@@ -99,7 +99,29 @@ export class S4Cmdir {
     await this.openIso();
     await this._connectTunnel();
     this.ready = true;
+    this.startedMs = Date.now();
+    this._statTs = this.startedMs;
+    this._statBytes = 0;
+    this._bps = 0;
     if (this.events.onStatus) this.events.onStatus('cdmedia:connected');
+  }
+
+  // Свои метрики (S4-схема; НЕ связаны с M2/S2). bytes — реально отдано ISO
+  // в iRMC; bps — дельта между вызовами (UI опрашивает раз в 2с).
+  stats() {
+    const now = Date.now();
+    const dt = now - (this._statTs || now);
+    const db = this.nBytes - (this._statBytes || 0);
+    if (dt > 0) this._bps = Math.round((db / dt) * 1000);
+    this._statTs = now;
+    this._statBytes = this.nBytes;
+    return {
+      engine: 's4-cdmedia',
+      active: !!(this.sock && !this.sock.destroyed),
+      startedMs: this.startedMs || 0,
+      bytes: this.nBytes || 0,
+      bps: this._bps || 0,
+    };
   }
 
   _connectTunnel() {

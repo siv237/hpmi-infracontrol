@@ -55,6 +55,11 @@ const storage = await import('./storage.js');
 const sessions = new Map();
 const sessionsByHost = new Map(); // host -> token (one active console per host)
 
+// Активный S4 VirtualMedia-редирект (один на процесс). ДОЛЖЕН быть в области
+// модуля: mount/unmount/stats — разные HTTP-запросы, при объявлении внутри
+// обработчика он обнулялся бы на каждом запросе.
+let activeCmdir = null;
+
 // Сессии входа: токен -> userId (см. /api/login, authUser)
 const authSessions = new Map();
 
@@ -742,7 +747,13 @@ const server = http.createServer(async (req, res) => {
   // === Монтирование ISO: состояние «что примонтировано» (п.10/10.5) ===
   // Реальный проброс ISO. S4 (AMI/IVTP) — СВОЙ движок CDMEDIA (s4cmdir.js);
   // S2 (Avocent) — нативный M2 (m2.js). Никакого смешивания.
-  let activeCmdir = null; // активный S4 CD-редирект (один на процесс)
+  // Живой KVM-клиент (IVTP) для хоста — чтобы сигналить MediaRedirectionState
+  // [24] по KVM-каналу (BMC по нему подключает/отключает виртуальные устройства).
+  function kvmClientForHost(host) {
+    const tok = sessionsByHost.get(host);
+    const s = tok ? sessions.get(tok) : null;
+    return (s && s.engine === 'ivtp' && s.cli) ? s.cli : null;
+  }
   async function realMount(srv, isoId) {
     let cfg;
     try { cfg = await getServer(srv.id); } catch { cfg = srv; }
@@ -768,7 +779,10 @@ const server = http.createServer(async (req, res) => {
         onRaw: (f) => { if (process.env.IRMC_DEBUG === '1') console.log('[cdmedia] rx', f.length, f.toString('hex')); },
       });
       activeCmdir = c;
-      try { await c.start(); return true; } catch (e) { activeCmdir = null; throw e; }
+      await c.start();
+      // [24]=1: сообщить BMC о старте media-redirection (KVM-канал)
+      try { kvmClientForHost(host)?.mediaRedir(true); } catch {}
+      return true;
     }
     // S2: нативный Avocent-URS
     return m2.share({
@@ -777,7 +791,12 @@ const server = http.createServer(async (req, res) => {
     });
   }
   function realUnmount() {
-    if (activeCmdir) { try { activeCmdir.close(); } catch {} activeCmdir = null; }
+    if (activeCmdir) {
+      // [24]=0: снять виртуальные устройства у гостя
+      try { kvmClientForHost(activeCmdir.cfg.host)?.mediaRedir(false); } catch {}
+      try { activeCmdir.close(); } catch {}
+      activeCmdir = null;
+    }
     m2.unshare();
   }
   // Список монтирований (все серверы) — с именами серверов/образов
@@ -791,9 +810,11 @@ const server = http.createServer(async (req, res) => {
     }));
     return json(res, 200, { ok: true, mounts: out });
   }
-  // Живые метрики активного монтирования (активность/скорость передачи)
+  // Живые метрики активного монтирования (активность/скорость передачи).
+  // Схемы раздельные: S4 (s4-cdmedia, читает Node) и S2 (M2/Avocent-URS).
   if (url.pathname === '/api/mounts/stats' && req.method === 'GET') {
-    return json(res, 200, { ok: true, stats: m2.stats() });
+    const stats = (activeCmdir && activeCmdir.ready) ? activeCmdir.stats() : m2.stats();
+    return json(res, 200, { ok: true, stats });
   }
   // Восстановить сессию монтирования (admin): повторный share по прошлому конфигу
   if (url.pathname === '/api/mounts/recover' && req.method === 'POST') {

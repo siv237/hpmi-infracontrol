@@ -1101,3 +1101,23 @@ s4Sid -> S4Cmdir; S2 -> m2). Статус: работает, CD-ROM виден.
    showLogin(), который ОЧИЩАЛ поля ввода (буквы стирались, «страница
    рефрешится»). Фикс: showLogin чистит поля только при первом показе;
    опрос /api/mounts/stats с {_noKick:true}. Проверено владельцем.
+
+## [2026-09-11] fix | S4: счётчик байт, зависший диск, MediaRedirectionState [24]
+Владелец: счётчик «передано/скорость» стоял на 0 (хотя копирование шло,
+~1.1 МБ/с по /proc/<pid>/io); после «отмонтировать» диск оставался в системе.
+Корень (общий): activeCmdir был объявлен ВНУТРИ колбэка http.createServer
+(per-request) -> stats/unmount-запросы видели null, отдавали m2.stats() (S2)
+и не закрывали CDMEDIA-сокет (утечка -> BMC держал устройство).
+Фиксы (схемы раздельные, без универсальных сокетов):
+- server/index.js: activeCmdir перенесён в область модуля (стр.61).
+- server/s4cmdir.js: свой stats() (engine 's4-cdmedia', bytes, bps);
+  startedMs/bps-семпл.
+- server/index.js: /api/mounts/stats отдаёт S4-метрики при активном S4,
+  иначе m2 (S2).
+- IVTP [24] MediaRedirectionState: JViewer шлёт по KVM-каналу 1=старт/
+  0=стоп редиректа — BMC по нему подключает/отключает виртуальные
+  устройства. Добавлено: console-ivtp.js MEDIA_REDIR_STATE:24 +
+  IvtpClient.mediaRedir(on); index.js шлёт mediaRedir(true/false) при
+  S4 mount/unmount в живую KVM-сессию.
+Зависший диск от прежней утечки снимается перезапуском сервера (закрытие
+сокета) / при необходимости ресетом BMC (SCCI 0x0203).
