@@ -128,19 +128,63 @@ export async function readChassis(opts) {
 
 // Инвентарь FRU (производитель/модель/серийник/version). Строки «key : value».
 export async function readFru(opts) {
+  // Обход всех FRU-областей (0..5): у PRIMERGY/iRMC S4 данные разложены
+  // по областям — chassis/product во 2-й, board в 3-й, дефолтная 0-я
+  // часто пуста. Собираем всё в один словарь.
   const { host, username, password } = opts;
-  const base = ['-I', 'lanplus', '-H', host, '-U', username, '-P', password || ''];
   const env = { ...process.env, IPMITOOL_PASS: password || '' };
-  const out = await run(base, ['fru', 'print'], env);
+  const base = ['-I', 'lanplus', '-H', host, '-U', username, '-P', password || ''];
   const fru = {};
-  for (const line of out.split('\n')) {
-    const m = line.match(/^([A-Za-z0-9 /_.-]+?)\s*:\s*(.+)$/);
-    if (!m) continue;
-    const k = m[1].trim().toLowerCase();
-    const v = m[2].trim();
-    if (v && v !== 'Unknown') fru[k] = v;
+  for (let i = 0; i <= 5; i++) {
+    let out;
+    try {
+      const r = await exec('ipmitool', [...base, 'fru', 'print', String(i)], { env, timeout: 8000, maxBuffer: 64 * 1024 });
+      out = r.stdout || '';
+    } catch { continue; }
+    for (const line of out.split('\n')) {
+      const m = /^\s*([\w \-/]+?)\s*:\s*(.*?)\s*$/.exec(line);
+      if (!m) continue;
+      const k = m[1].toLowerCase();
+      if (k.startsWith('fru') || k === '') continue;
+      if (!fru[k] && m[2] && m[2] !== 'Unknown') fru[k] = m[2];
+    }
   }
-  return { host: opts.host, fru };
+  return { host, fru };
+}
+
+// Инвентарь из IPMI (fallback, когда веб-инвентарь недоступен — iRMC S4):
+// FRU-области + mc info + chassis power. Ключи совместимы с веб-инвентарём
+// S2 (detail.js SI_ROWS), чтобы фронт не менялся.
+export async function ipmiInventory(opts) {
+  const [fruR, qc, chassis] = await Promise.all([
+    readFru(opts).catch(() => ({ fru: {} })),
+    quickCheck(opts).catch(() => null),
+    readChassis(opts).catch(() => ({ power: null })),
+  ]);
+  const fru = fruR.fru || {};
+  const inv = {};
+  const put = (k, v) => { if (v && v !== 'Unknown' && !inv[k]) inv[k] = v; };
+  // Ключи — как у веб-инвентаря S2 (detail.js SI_ROWS ищет их по src).
+  put('Manufacturer', fru['product manufacturer'] || fru['board mfg'] || (qc && qc.ipmi.manufacturer) || '');
+  put('Model', fru['product name'] || fru['board product'] || '');
+  put('Serial Number', fru['product serial'] || fru['chassis serial'] || fru['board serial'] || '');
+  put('Asset Tag', fru['product asset tag'] || '');
+  put('BIOS Version', fru['bios version'] || '');
+  if (qc && qc.ipmi) {
+    put('BMC', qc.ipmi.bmcFirmware || '');
+    put('IPMI Firmware', 'IPMI ' + (qc.ipmi.ipmiVersion || '') + ' · ' + (qc.ipmi.manufacturer || '') + ' · BMC ' + (qc.ipmi.bmcFirmware || ''));
+  }
+  if (qc && qc.lan) {
+    if (qc.lan.mac) put('MAC', qc.lan.mac);
+    if (qc.lan.ip) put('System IP', qc.lan.ip);
+  }
+  const board = [];
+  if (fru['board product']) board.push('Board: ' + fru['board product'] + (fru['board part number'] ? ' (' + fru['board part number'] + ')' : ''));
+  if (fru['board mfg date']) board.push('Board date: ' + fru['board mfg date']);
+  if (fru['chassis type']) board.push('Chassis: ' + fru['chassis type'] + (fru['chassis part number'] ? ' (' + fru['chassis part number'] + ')' : ''));
+  if (fru['product version']) board.push('Version: ' + fru['product version']);
+  if (board.length) put('Description', board.join(' · '));
+  return inv;
 }
 
 // Парсинг `lan print` (сетевые настройки BMC). Многострочные значения

@@ -147,9 +147,10 @@ export function attachVnc(ws, sess) {
     // once numRects >= 2).
     let numRects = rs.length;
     const leads = [];
-    if (sentW !== 0 && (w !== sentW || h !== sentH)) {
-      // Resolution change: prepend a DesktopSize pseudo-rect so noVNC resizes
-      // its display and rescales (keeps aspect ratio inside its window).
+    // DesktopSize без условия sentW!==0: если WS-клиент подключился ДО первого
+    // IVTP-кадра, ServerInit ушёл с 0x0 (canvas noVNC 0x0), и БЕЗ DesktopSize
+    // первый реальный кадр рендерился в нулевой canvas (невидим).
+    if (w !== sentW || h !== sentH) {
       const ds = Buffer.alloc(12);
       ds.writeUInt16BE(0, 0);
       ds.writeUInt16BE(0, 2);

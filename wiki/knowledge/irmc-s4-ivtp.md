@@ -75,15 +75,14 @@ VESA16FrameHndlr.get_set_byte) — не реализовано, на 042 не в
 
 Ввод IUSB-HID (USBKeyboardRep/USBMouseRep, put-последовательность):
 - общий буфер: `[0..7] IVTP-hdr; [8..15] «IUSB    »; [16]=1; [17]=0;
-  [18]=32; [19] checksum; [20..23] dataLen; [24]=0; [25] devType
-  (клава 0x30 / мышь 0x31); [26] proto (0x10/0x20); [27]=0x80;
-  [28]=2 devNum; [29] ifNum (0/1); [30..31]=0; [32..35] seq;
-  [36..39]=0; [40] tailLen; [41..] USB-отчёт`. Checksum [19] =
-  -(сумма байт [8..39]) & 0xff.
+  [18]=32; [19] checksum(-сумма [8..39]); [20..23] dataLen; [24]=0;
+  [25] devType (клава 0x30 / мышь 0x31); [26] proto (0x10/0x20);
+  [27]=0x80; [28]=2 devNum; [29] ifNum (0/1); [30..31]=0; [32..35] seq;
+  [36..39]=0; [40] tailLen; [41..] USB-отчёт`.
 - клава: буфер 49б / pktSize 41; dataLen 9; tailLen 8; отчёт 8б
-  (USBKeyboardRepPkt): **[0]=mods, [1]=pressFlag (1=down / 0=up — это
-  СОБЫТИЕ, не резерв!), [2..7]=до 6 HID-кодов**. Прежний формат
-  [mods,0,k1..k6] BMC не принимал — ввод молча терялся;
+  (USBKeyboardRepPkt): **[0]=mods, [1]=autoKeyBreak (по умолч. 0 —
+  НЕ pressFlag!), [2..7]=до 6 кодов**; нажатие = код в слote [2],
+  отпускание = код убран (слот обнуляется);
 - мышь ABS: буфер 47б / pktSize 39; dataLen 7; tailLen 6; отчёт
   `btn(1) x-i16 y-i16 wheel(1)` (×32767/screenW). btn: bit0 L, bit1 R,
   bit2 M (m_mouseListener). Режим мыши BMC сообщает в [10] (2=ABSOLUTE);

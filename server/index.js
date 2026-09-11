@@ -78,18 +78,14 @@ function createSession(name, host) {
     fb(rects) {
       const c = sess.cli;
       if (!c) return { width: 0, height: 0, pix: new Uint32Array(0) };
-      // IVTP (S4): pix уже RGBA-Uint32Array — отдаём напрямую; поверх —
-      // аппаратный курсор (BMC шлёт его отдельно [4098]/[4099]).
-      if (sess.engine === 'ivtp') {
-        try { c._drawCursor?.(); } catch {}
-        return { width: c.fb.width, height: c.fb.height, pix: c.fb.pix };
-      }
+      // IVTP (S4): pix уже RGBA-Uint32Array — отдаём напрямую.
+      if (sess.engine === 'ivtp') return { width: c.fb.width, height: c.fb.height, pix: c.fb.pix };
       return { width: c.fb.width, height: c.fb.height, pix: rects ? c.fb.getRGBFor(rects) : c.fb.getRGB() };
     },
     fbSize() { const c = sess.cli; return c ? { width: c.fb.width, height: c.fb.height } : { width: 0, height: 0 }; },
     key: (k, d) => {
       const c = sess.cli; if (!c) return;
-      if (sess.engine === 'ivtp') return; // HID-отчёты собираются в ivtpKey (vnc.js -> keysym)
+      if (sess.engine === 'ivtp') { c.keyEvent(k, d); return; } // HID-код -> IUSB
       c.key(k, d);
     },
     // IVTP: сборка USB-HID отчётов из потока событий (см. ivtpKey/ivtpMouse)
