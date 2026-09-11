@@ -45,6 +45,8 @@ const IVTP = {
   CONF_SERVICE_STATUS: 37, MOUSE_MEDIA_INFO: 38, GET_ACTIVE_CLIENTS: 39,
   GET_USER_MACRO: 40, KVM_SHARING: 51, MEDIA_LICENSE_STATUS: 53,
   KVM_DISCONNECT: 54, SET_KBD_LANG: 55,
+  // SOC-расширения (SOCIVTPPktHdr): палитра/атрибуты/аппаратный курсор
+  XCURSOR: 4098, CURSOR_POS: 4099,
 };
 
 function ivtpHdr(type, size, status = 0) {
@@ -148,6 +150,7 @@ export class IvtpClient {
     this._mods = 0;
     this._keys = new Set();
     this._mx = 0; this._my = 0; this._mbtn = 0; this._mwheel = 0;
+    this._cursor = { mode: 0, pal: [], map: null, pos: null, dirty: false };
   }
 
   async start() {
@@ -290,6 +293,8 @@ export class IvtpClient {
       case IVTP.MEDIA_LICENSE_STATUS: break;  // [53] статус лицензии медиа
       case IVTP.MOUSE_MEDIA_INFO: break;      // [38] кол-ва инстансов
       case IVTP.SET_KBD_LANG: break;           // [55]-ответ
+      case IVTP.XCURSOR: this._onHWCursor(body); break;      // [4098] форма курсора
+      case IVTP.CURSOR_POS: this._onCursorPos(body); break;  // [4099] позиция
       case IVTP.BLANK_SCREEN: {
         // BMC: «нет сигнала с хоста» (JViewer рисует nosignal.jpg). Даём
         // фреймбуфер-заглушку, чтобы клиент видел серый экран (а не 0x0),
@@ -308,13 +313,99 @@ export class IvtpClient {
       case IVTP.STOP_IMMEDIATE:
         this.events.onStatus?.('отключено сервером (type=' + h.type + ' status=' + h.status + ')');
         this.close();
-        break;
-      case IVTP.KVM_DISCONNECT:
+        break;      case IVTP.KVM_DISCONNECT:
         this.events.onStatus?.('KVM-канал закрыт сервером');
         this.close();
         break;
       default: break; // прочее — игнорируем
     }
+  }
+
+  // ---- аппаратный курсор (SOC) -----------------------------------------------
+  // [4099] CursorPos (8×i32): enable, startAddr, endAddr, posX, posY.
+  // Позиция приходит отдельно от формы; при enable=0 курсор скрыт.
+  _onCursorPos(body) {
+    if (body.length < 20) return;
+    const enable = body.readInt32LE(0);
+    const x = body.readInt32LE(12);
+    const y = body.readInt32LE(16);
+    this._cursor.pos = enable ? { x, y } : null;
+    this._cursor.dirty = true;
+    this.events.onFrame?.(this.fb, null);
+  }
+
+  // [4098] HardwareCursor (до 3125б, Read_data): mode(1) pos_x(2) pos_y(2)
+  // палитра 16×RGB(48) + карта 64 строки × (2 или 6) плана u64 (по mode).
+  // Aligncursor (mode 2 = XGA): бит (map0,map1): 00→палитра[0], 10→палитра[1],
+  // 11→XOR фона; колонки идут СПРАВА налево (n6 от 63 вниз).
+  _onHWCursor(body) {
+    if (body.length < 7) return;
+    const b = body;
+    const mode = b[0];
+    const px = b.readInt16LE(1), py = b.readInt16LE(3);
+    const pal = [];
+    let o = 5;
+    for (let i = 0; i < 16 && o + 2 < b.length; i++) {
+      pal.push({ r: b[o], g: b[o + 1], bl: b[o + 2] });
+      o += 3;
+    }
+    o = 5 + 48;
+    const planes = mode === 4 ? 6 : 2;
+    const rows = 64;
+    const need = rows * planes * 8;
+    if (b.length < o + need) { this._cursor.map = null; return; } // урезанный — игнор
+    const map = [];
+    for (let i = 0; i < rows; i++) {
+      const row = [];
+      for (let p = 0; p < planes; p++) row.push(Number(b.readBigUInt64LE(o + (i * planes + p) * 8)));
+      map.push(row);
+    }
+    this._cursor = { mode, pal, map, pos: { x: px, y: py }, dirty: true };
+    this.events.onFrame?.(this.fb, null);
+  }
+
+  // Композитинг курсора в fb (вызывается из fb()/снапшота до выдачи пикселей):
+  // рисуем поверх текущего буфера 64×64 с XOR по образцу Aligncursor.
+  _drawCursor() {
+    const c = this._cursor;
+    if (!c || !c.map || !c.pos || !this.fb.pix) return;
+    const { x: cx, y: cy } = c.pos;
+    const fw = this.fb.width, fh = this.fb.height;
+    const px = this.fb.pix;
+    for (let i = 0; i < 64; i++) {
+      const y = cy + i;
+      if (y < 0 || y >= fh) continue;
+      for (let n6 = 63, n = 0; n < 64; n6--, n++) {
+        const x = cx + n6; // колонка слева направо = бит 63..0
+        if (x < 0 || x >= fw) continue;
+        const l = BigInt(c.map[i][0]);   // map0
+        const l5 = BigInt(c.map[i][1]);  // map1
+        const b0 = (l >> BigInt(n6)) & 1n;
+        const b1 = (l5 >> BigInt(n6)) & 1n;
+        const idx = y * fw + x;
+        const cur = px[idx];
+        let v = null;
+        if (c.mode === 4) {
+          // 16-цветный: colorIdx из 4 планов (каждые 4 бита), планы 4/5 — маски
+          const l4 = BigInt(c.map[i][4]), l5m = BigInt(c.map[i][5]);
+          const m0 = (l4 >> BigInt(n6)) & 1n, m1 = (l5m >> BigInt(n6)) & 1n;
+          if (m0 === 0n && m1 === 0n) {
+            const n3 = Math.floor(n / 16); // 4 плана по 16 бит-полос — упрощённо
+            const shift = BigInt(n % 16) * 4n;
+            const ci = Number((BigInt(c.map[i][n3]) >> shift) & 0xfn);
+            const p = c.pal[ci] || { r: 255, g: 255, bl: 255 };
+            v = (p.r << 16) | (p.g << 8) | p.bl;
+          } else if (m0 === 1n && m1 === 0n) v = cur ^ 0xffffff;
+        } else {
+          // XGA (mode 2): 00→pal[0], 10→pal[1], 11→XOR
+          if (b1 === 0n && b0 === 0n) { const p = c.pal[0]; v = p ? (p.r << 16) | (p.g << 8) | p.bl : cur; }
+          else if (b1 === 1n && b0 === 1n) v = cur ^ 0xffffff;
+          else if (b1 === 0n && b0 === 1n) { const p = c.pal[1]; v = p ? (p.r << 16) | (p.g << 8) | p.bl : cur; }
+        }
+        if (v !== null) px[idx] = v >>> 0;
+      }
+    }
+    c.dirty = false;
   }
 
   // [25]: body = fragNum(2 LE) + payload. Первый фрагмент: fragNum&0x7fff==0;

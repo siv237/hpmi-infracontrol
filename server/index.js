@@ -78,8 +78,12 @@ function createSession(name, host) {
     fb(rects) {
       const c = sess.cli;
       if (!c) return { width: 0, height: 0, pix: new Uint32Array(0) };
-      // IVTP (S4): pix уже RGBA-Uint32Array — отдаём напрямую.
-      if (sess.engine === 'ivtp') return { width: c.fb.width, height: c.fb.height, pix: c.fb.pix };
+      // IVTP (S4): pix уже RGBA-Uint32Array — отдаём напрямую; поверх —
+      // аппаратный курсор (BMC шлёт его отдельно [4098]/[4099]).
+      if (sess.engine === 'ivtp') {
+        try { c._drawCursor?.(); } catch {}
+        return { width: c.fb.width, height: c.fb.height, pix: c.fb.pix };
+      }
       return { width: c.fb.width, height: c.fb.height, pix: rects ? c.fb.getRGBFor(rects) : c.fb.getRGB() };
     },
     fbSize() { const c = sess.cli; return c ? { width: c.fb.width, height: c.fb.height } : { width: 0, height: 0 }; },
@@ -159,14 +163,24 @@ async function startSession(sess, host, user, pass, port, secure) {
       onFrame: (fb) => {
         sess.width = fb.width; sess.height = fb.height;
         sess.lastFrameAt = Date.now();
-        for (const cb of sess.listeners) cb(fb, null);
+        // vnc.js шлёт клиенту только то, что перечислено в rects: IVTP-кадр —
+        // всегда полный экран (частичности собираются фрагментами внутри
+        // кадра), отдаём full-screen rect. null vnc.js молча пропускал —
+        // «подключено, но изображения нет».
+        if (fb.width > 0 && fb.height > 0) {
+          const full = [{ x: 0, y: 0, w: fb.width, h: fb.height }];
+          for (const cb of sess.listeners) cb(fb, full);
+        }
       },
     });
     sess.cli = cli;
     sess.engine = 'ivtp';
     await cli.start();
+    // Keyframe: [11] просит BMC переслать полный экран (статика/бланк молчат),
+    // forceFull() гарантирует full-repaint браузерам — чинит выпавшие куски
+    // и «чёрный экран» подключённых noVNC-клиентов.
     sess._keyframe = setInterval(() => {
-      try { sess.cli?.invalidateFull(); } catch {}
+      try { sess.cli?.invalidateFull(); sess.forceFull(); } catch {}
     }, 10000);
     return sess;
   }
@@ -419,12 +433,15 @@ const server = http.createServer(async (req, res) => {
     const token = decodeURIComponent(url.pathname.slice('/api/snapshot/'.length));
     const s = sessions.get(token);
     if (!s || !s.cli) return json(res, 404, { ok: false, error: 'no session' });
-    const fb = s.cli.fb;
-    const rgb = (fb && fb.getRGB ? fb.getRGB() : new Uint32Array(0));
-    const file = saveScreenshot('console', fb.width, fb.height, rgb);
-    const png = encodePng(fb.width, fb.height, rgb);
+    // Единый путь через sess.fb(): S2 — getRGB() (палитра→0x00RRGGBB),
+    // S4/IVTP — pix напрямую (уже 0x00RRGGBB). Раньше брали s.cli.fb.getRGB,
+    // которого у IvtpFramebuffer нет → снимок S4 всегда был пустым.
+    const d = s.fb();
+    const rgb = d.pix || new Uint32Array(0);
+    const file = saveScreenshot('console', d.width, d.height, rgb);
+    const png = encodePng(d.width, d.height, rgb);
     return json(res, 200, {
-      ok: true, width: fb.width, height: fb.height,
+      ok: true, width: d.width, height: d.height,
       png: png ? 'data:image/png;base64,' + png.toString('base64') : null,
       saved: file || null,
     });
@@ -566,6 +583,21 @@ const server = http.createServer(async (req, res) => {
       }
       return json(res, 200, { ok: true, inventory: invMap, configChanges, ...inv });
     } catch {
+      // Веб-инвентарь недоступен (iRMC S4: Digest-сессии нет) — fallback
+      // на IPMI: FRU-области + mc info дают модель/серийник/BMC/MAC.
+      try {
+        const opts = { host: cfg.host, username: cfg.username, password: cfg.password || '' };
+        const invMap = await ipmi.ipmiInventory(opts);
+        if (Object.keys(invMap).length) {
+          let configChanges = [];
+          if (body.serverId) {
+            configChanges = db.saveSnapshot(body.serverId, invMap).changes;
+            db.recordVersionSnapshot(body.serverId, invMap, req.user?.login || null);
+            db.addEvent(body.serverId, 'info', `Данные IPMI получены — веб-инвентарь недоступен (${cfg.name || cfg.host})`);
+          }
+          return json(res, 200, { ok: true, inventory: invMap, configChanges, source: 'ipmi' });
+        }
+      } catch { /* IPMI тоже не смог — ниже общий probe */ }
       try {
         const p = await probe(cfg);
         return json(res, 200, p);
