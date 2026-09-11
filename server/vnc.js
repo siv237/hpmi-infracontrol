@@ -221,9 +221,16 @@ export function attachVnc(ws, sess) {
         const v = pix ? pix[i] : 0;
         const r = (v >>> 16) & 255, g = (v >>> 8) & 255, b = v & 255;
         const R = Math.round(r * redMax / 255), G = Math.round(g * greenMax / 255), B = Math.round(b * blueMax / 255);
-        if (bpp >= 24) {
-          if (big) { out[o] = R; out[o + 1] = G; out[o + 2] = B; if (bppB === 4) out[o + 3] = 0; }
-          else { out[o] = B; out[o + 1] = G; out[o + 2] = R; if (bppB === 4) out[o + 3] = 0; }
+        if (bpp === 32) {
+          // Учитываем РЕАЛЬНЫЕ сдвиги клиента и endianness (раньше жёстко
+          // B,G,R — ломало клиентов с redShift=0/blueShift=16 → оранжевый).
+          const px = ((R << rs) | (G << gs) | (B << bs)) >>> 0;
+          if (big) { out[o] = (px >>> 24) & 0xFF; out[o + 1] = (px >>> 16) & 0xFF; out[o + 2] = (px >>> 8) & 0xFF; out[o + 3] = px & 0xFF; }
+          else { out[o] = px & 0xFF; out[o + 1] = (px >>> 8) & 0xFF; out[o + 2] = (px >>> 16) & 0xFF; out[o + 3] = (px >>> 24) & 0xFF; }
+        } else if (bpp >= 24 && bpp < 32) {
+          // 24bpp: общий случай — порядок RGB по сдвигам, 3 байта без альфы.
+          if (big) { out[o] = R; out[o + 1] = G; out[o + 2] = B; }
+          else { out[o] = B; out[o + 1] = G; out[o + 2] = R; }
         } else if (bpp === 16) {
           const px = (R << rs) | (G << gs) | (B << bs);
           if (big) { out[o] = (px >> 8) & 0xFF; out[o + 1] = px & 0xFF; }
@@ -304,6 +311,7 @@ export function attachVnc(ws, sess) {
       clientFmt = { bpp: p[4], depth: p[5], bigEndian: p[6], trueColor: p[7],
         redMax: p.readUInt16BE(8), greenMax: p.readUInt16BE(10), blueMax: p.readUInt16BE(12),
         redShift: p[14], greenShift: p[15], blueShift: p[16] };
+      if (process.env.IRMC_DEBUG === '1') console.log('[vnc] clientFmt =', JSON.stringify(clientFmt));
     } else if (t === 2) { // SetEncodings — ignore (raw only)
     } else if (t === 3) { // FramebufferUpdateRequest
       const incremental = p[1] !== 0;
