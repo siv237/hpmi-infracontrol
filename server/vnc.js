@@ -184,6 +184,15 @@ export function attachVnc(ws, sess) {
 
   const DEFAULT_FMT = { bpp: 32, depth: 24, bigEndian: 0, trueColor: 1, redMax: 255, greenMax: 255, blueMax: 255, redShift: 16, greenShift: 8, blueShift: 0 };
 
+  // КОНТРАКТ: общий RFB-мост НЕ знает, какая система (S2/S4) за ним. Он
+  // потребляет `fb.pix` строго в канонической форме 0x00RRGGBB (R — старший
+  // байт). Приведение каналов к канону — обязанность КАЖДОГО движка:
+  //   S2: server/irmc-decode.js (IrmcFramebuffer, 0x00RRGGBB)
+  //   S4: server/console-ivtp.js (IvtpFramebuffer, 0x00RRGGBB)
+  // Если движок отдаёт иной порядок (напр. 0x00BBGGRR) — это баг движка,
+  // а не повод «компенсировать» здесь. Здесь только конверсия канона в
+  // запрошенный клиентом формат (shifts/endianness).
+
   // Honour the client's SetPixelFormat (noVNC requests its own format); if we
   // ignore it and force 32bpp, noVNC misreads the byte stream -> garbled image.
   function convertRect(fb, x, y, W, H) {

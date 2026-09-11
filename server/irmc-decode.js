@@ -334,7 +334,14 @@ export class IrmcFramebuffer {
               if (bpp > 8) {
                 const green = decG.next();
                 const red = bpp > 16 ? decR.next() : 0;
-                this.pix[p] = ((red & 0xFF) | ((green & 0xFF) << 8) | ((blue & 0xFF) << 16)) >>> 0;
+                // План-порядок потока: plan0=B, plan1=G, plan2=R (как в S4
+                // console-ivtp drle_PIII). Собираем КАНОНИЧЕСКИЙ 0x00RRGGBB
+                // (инвариант проекта): red — старший байт. Раньше здесь было
+                // red|green<<8|blue<<16 = 0x00BBGGRR (нарушение инварианта),
+                // которое компенсировал старый vnc.js; после перехода vnc.js
+                // на канон — перепутались R/B. Формат пикселей — знание
+                // движка, общий RFB/png-мост работает только с 0x00RRGGBB.
+                this.pix[p] = ((blue & 0xFF) | ((green & 0xFF) << 8) | ((red & 0xFF) << 16)) >>> 0;
               } else {
                 this.idx[p] = blue & 0xFF;
               }
