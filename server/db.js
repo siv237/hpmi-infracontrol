@@ -146,6 +146,14 @@ export function initDb(dbFile = DB_FILE) {
       inventory TEXT NOT NULL        -- JSON
     );
 
+    -- Последний удачный снимок ЖЕЛЕЗА (IPMI: CPU/DIMM/RAID/БП/датчики) —
+    -- offline-first: показываем даже если сервер недоступен.
+    CREATE TABLE IF NOT EXISTS hw_known (
+      server_id TEXT NOT NULL PRIMARY KEY,
+      ts INTEGER NOT NULL,
+      hardware TEXT NOT NULL         -- JSON
+    );
+
     -- Изменения ключевых полей конфигурации
     CREATE TABLE IF NOT EXISTS config_changes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -590,6 +598,21 @@ export function getLastKnown(serverId) {
   const r = db.prepare('SELECT ts, inventory FROM last_known WHERE server_id=?').get(serverId);
   if (!r) return null;
   try { return { ts: new Date(r.ts).toISOString(), inventory: JSON.parse(r.inventory) }; } catch { return null; }
+}
+
+// Последний удачный снимок железа (offline-first).
+export function saveHardware(serverId, hardware, ts = Date.now()) {
+  if (!db) initDb();
+  if (!hardware || !Object.keys(hardware).length) return;
+  db.prepare('INSERT INTO hw_known (server_id, ts, hardware) VALUES (?,?,?) ON CONFLICT(server_id) DO UPDATE SET ts=excluded.ts, hardware=excluded.hardware')
+    .run(serverId, ts, JSON.stringify(hardware));
+}
+
+export function getHardware(serverId) {
+  if (!db) initDb();
+  const r = db.prepare('SELECT ts, hardware FROM hw_known WHERE server_id=?').get(serverId);
+  if (!r) return null;
+  try { return { ts: new Date(r.ts).toISOString(), hardware: JSON.parse(r.hardware) }; } catch { return null; }
 }
 
 export function getChanges(serverId, limit = 100) {

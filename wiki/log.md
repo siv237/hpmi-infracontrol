@@ -1255,3 +1255,23 @@ IPMI Firmware/MAC/System IP/Asset Tag/Description).
 41f9119a-…, System Name DGK51SRV042, OS "Windows Server 2012 R2 Standard",
 Power LED Вкл, Error LED Норма, + прежние модель/серийник/BMC/MAC/IP/asset/
 описание). Фронт (SI_ROWS) эти ключи уже отображает. npm test 31 pass.
+
+## [2026-09-13] feat | вкладка «Оборудование» из IPMI (аккордеон)
+Владелец: вкладка дублировала общую инфо — переписана под реальное железо.
+- ipmi.js readHardware(): FRU-устройства (шасси/плата/RAID/БП), процессоры
+  (sdr type Processor), память DIMM (MEM A..H), вентиляторы (RPM), питание
+  (PSU temp/watts, Total Power, Power Unit redundant), накопители/RAID,
+  температуры, напряжения.
+- Фикс run(): ipmitool нередко выходит с non-zero (warning «Unknown FRU
+  header»), данные при этом в stdout — теперь забираем e.stdout (из-за этого
+  FRU-устройства терялись). readFru переведён на run().
+- readHardware: поиск числовых значений по имени И единице (имена сенсоров
+  дублируются: PSU1 — температура и дискрет).
+- API: GET /api/hardware?serverId.
+- web: вкладка «Оборудование» (pane-hardware) — контейнер аккордеона hwBox;
+  detail.js loadHardware()/hwSection()/renderHWTable(); секции CPU/DIMM/RAID/
+  питание/вентиляторы/температуры/напряжения/FRU, раскрытие по клику (как
+  «Шаблоны»); кэш dbgHw/hwOpen. test/web-split обновлён.
+Проверено на 042: 2 CPU, 8 DIMM, 14 фанов, RAID Controller, PSU1/PSU2
+(55°/54°, 48 Вт), Total 96 Вт, Fully Redundant, 6 FRU-устройств
+(Chassis/MainBoard/MegaRAID/PSU1/PSU2). npm test 30 pass/1 skip.

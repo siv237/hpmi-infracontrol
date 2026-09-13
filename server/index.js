@@ -567,6 +567,32 @@ const server = http.createServer(async (req, res) => {
     } catch (e) { return json(res, 200, { ok: false, error: String(e.message || e) }); }
   }
 
+  // Информация по ЖЕЛЕЗУ (вкладка «Оборудование»): FRU-устройства (шасси/
+  // плата/RAID/БП), процессоры, память DIMM, вентиляторы, питание, накопители,
+  // температуры и напряжения — всё из IPMI.
+  if (url.pathname === '/api/hardware' && req.method === 'GET') {
+    const serverId = url.searchParams.get('serverId');
+    if (!serverId) return json(res, 400, { ok: false, error: 'serverId required' });
+    const cached = db.getHardware(serverId);
+    // Offline-first: только последний удачный снимок (мгновенно, с меткой).
+    if (url.searchParams.get('cached') === '1') {
+      if (cached) return json(res, 200, { ok: true, hardware: cached.hardware, ts: cached.ts, source: 'cache' });
+      return json(res, 404, { ok: false, error: 'нет сохранённых данных' });
+    }
+    const srv = await getServer(serverId);
+    if (!srv) return json(res, 404, { ok: false, error: 'server not found' });
+    try {
+      const hardware = await ipmi.readHardware({ host: srv.host, username: srv.username, password: srv.password || '' });
+      const ts = new Date().toISOString();
+      db.saveHardware(serverId, hardware); // всё лежит в базе
+      return json(res, 200, { ok: true, hardware, ts, source: 'live' });
+    } catch (e) {
+      // Сервер недоступен — показываем последний снимок из базы.
+      if (cached) return json(res, 200, { ok: true, hardware: cached.hardware, ts: cached.ts, source: 'cache', error: String(e.message || e) });
+      return json(res, 200, { ok: false, error: String(e.message || e) });
+    }
+  }
+
   // Офлайн-данные: последний снимок инвентаря сервера (из БД)
   if (url.pathname.startsWith('/api/last-known/') && req.method === 'GET') {
     const id = decodeURIComponent(url.pathname.slice('/api/last-known/'.length));

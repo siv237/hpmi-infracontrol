@@ -76,8 +76,10 @@ async function run(base, sub, env, timeout = 20000) {
   try {
     const r = await exec('ipmitool', [...base, ...sub], { env, timeout, maxBuffer: 128 * 1024 });
     return r.stdout || '';
-  } catch {
-    return '';
+  } catch (e) {
+    // ipmitool нередко выходит с non-zero (например, warning «Unknown FRU
+    // header»), но валидные данные при этом уже в stdout — забираем их.
+    return (e && e.stdout) || '';
   }
 }
 
@@ -126,6 +128,86 @@ export async function readChassis(opts) {
   };
 }
 
+// Разбор `sdr elist`: строки "name | id | status | reading | value+units".
+function parseElist(out) {
+  const rows = [];
+  for (const line of out.split('\n')) {
+    const c = line.split('|');
+    if (c.length < 5) continue;
+    const name = c[0].trim(), status = c[2].trim(), value = c[4].trim();
+    if (!name) continue;
+    rows.push({ name, status, value });
+  }
+  return rows;
+}
+function numUnit(v) {
+  const m = /^(-?[\d.]+)\s*(.*)$/.exec(String(v || '').trim());
+  return m ? { num: Number(m[1]), unit: m[2] } : { num: NaN, unit: String(v || '') };
+}
+// Разбор всего `ipmitool fru`: список устройств с полями.
+function parseFruDevices(out) {
+  const devices = []; let cur = null;
+  for (const line of out.split('\n')) {
+    const dm = /^FRU Device Description\s*:\s*(.*)$/i.exec(line);
+    if (dm) {
+      const raw = dm[1];
+      cur = { id: (/\(ID\s*(\d+)\)/i.exec(raw) || [])[1] || null, name: raw.replace(/\s*\(ID\s*\d+\)\s*$/i, '').trim(), fields: {} };
+      devices.push(cur);
+      continue;
+    }
+    if (!cur) continue;
+    const m = /^\s*([\w \-/.()]+?)\s*:\s*(.*?)\s*$/.exec(line);
+    if (m && !/^FRU Device Description/i.test(m[1])) cur.fields[m[1].trim()] = m[2];
+  }
+  return devices;
+}
+
+// Информация по ЖЕЛЕЗУ из IPMI (для вкладки «Оборудование»): FRU-устройства
+// (шасси/плата/RAID/БП), процессоры, память (DIMM), вентиляторы, питание,
+// накопители/RAID, температуры и напряжения.
+export async function readHardware(opts) {
+  const { host, username, password } = opts;
+  const base = ['-I', 'lanplus', '-H', host, '-U', username, '-P', password || ''];
+  const env = { ...process.env, IPMITOOL_PASS: password || '' };
+  const [elistOut, fruOut, procOut] = await Promise.all([
+    run(base, ['sdr', 'elist'], env, 25000),
+    run(base, ['fru'], env, 30000),
+    run(base, ['sdr', 'type', 'Processor'], env, 15000),
+  ]);
+  const rows = parseElist(elistOut);
+  // Имена сенсоров дублируются (напр. PSU1 — и температура, и дискретный) —
+  // для числовых значений ищем конкретную строку по имени И единице.
+  const numByName = (n, unitRe) => {
+    const r = rows.find((x) => x.name === n && (!unitRe || unitRe.test(x.value)));
+    return r ? numUnit(r.value).num : null;
+  };
+
+  const cpu = parseElist(procOut).map((r) => ({ name: r.name, state: r.value || r.status }));
+  const memory = rows.filter((r) => /^MEM [A-H]$/i.test(r.name))
+    .map((r) => ({ name: r.name, temp: numUnit(r.value).num }));
+  const fans = rows.filter((r) => /^FAN/i.test(r.name) && /RPM/i.test(r.value))
+    .map((r) => ({ name: r.name, rpm: numUnit(r.value).num }));
+  const psu = ['PSU1', 'PSU2'].map((p) => ({
+    name: p,
+    temp: numByName(p, /degrees C/i),
+    watts: numByName(p + ' Power', /Watts/i),
+    present: rows.some((x) => x.name === p && x.status === 'ok'),
+  }));
+  const punit = rows.find((x) => x.name === 'Power Unit');
+  const power = {
+    units: psu,
+    totalWatts: numByName('Total Power', /Watts/i),
+    redundant: /redundant/i.test(punit ? punit.value : ''),
+    state: punit ? punit.value : '',
+  };
+  const storage = rows.filter((r) => /raid|drive|hdd|disk/i.test(r.name))
+    .map((r) => ({ name: r.name, status: r.status, value: r.value }));
+  const temps = rows.filter((r) => /degrees C/i.test(r.value)).map((r) => ({ name: r.name, value: r.value }));
+  const volts = rows.filter((r) => /Volts/i.test(r.value)).map((r) => ({ name: r.name, value: r.value }));
+  const fru = parseFruDevices(fruOut);
+  return { host, cpu, memory, fans, power, storage, temps, volts, fru };
+}
+
 // Системная информация BMC (`mc getsysinfo`/`mc guid`): имя системы, ОС,
 // версия системной прошивки (BIOS), System GUID (UUID). Read-only, без SDR/SEL.
 export async function readSysInfo(opts) {
@@ -152,11 +234,7 @@ export async function readFru(opts) {
   const base = ['-I', 'lanplus', '-H', host, '-U', username, '-P', password || ''];
   const fru = {};
   for (let i = 0; i <= 5; i++) {
-    let out;
-    try {
-      const r = await exec('ipmitool', [...base, 'fru', 'print', String(i)], { env, timeout: 8000, maxBuffer: 64 * 1024 });
-      out = r.stdout || '';
-    } catch { continue; }
+    const out = await run(base, ['fru', 'print', String(i)], env, 8000);
     for (const line of out.split('\n')) {
       const m = /^\s*([\w \-/]+?)\s*:\s*(.*?)\s*$/.exec(line);
       if (!m) continue;

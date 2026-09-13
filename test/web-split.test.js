@@ -60,7 +60,7 @@ const EXPECTED_FUNCTIONS = [
   // groups
   'grpMetaOf','grpHasMeta','grpBadge','grpBoardHtml','loadGroupsPage','grpRefresh','grpPickRoot','grpMetaDlg','grpDelete','grpBoardClick','grpExpandToggle','initGroupsPage',
   // detail
-  'select','hideDetail','showDetail','renderDetail','renderKpiNet','loadActiveTab','trustKeys','valFrom','renderSI','renderHWTable',
+  'select','hideDetail','showDetail','renderDetail','renderKpiNet','loadActiveTab','trustKeys','valFrom','renderSI','renderHWTable','loadHardware','hwSection',
   // ipmi
   'hotCls','resetMetrics','loadSensors','loadMetrics','setMetric','setMetricSub','drawSpark','clearChart','tempChart','fanChart','respChart','avChart',
   // network

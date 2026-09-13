@@ -10,6 +10,7 @@ function switchTab(name){
   if(tab==='storage') renderStorage();
   if(tab==='health'){ try{ loadSensors(sel); }catch{} }
   if(tab==='network'){ try{ loadNetwork(sel); }catch{} }
+  if(tab==='hardware'){ try{ loadHardware(sel); }catch{} }
   if(tab==='overview'){ try{ loadMetrics(sel); }catch{} try{$('cvwrap').parentElement.scrollIntoView({block:'nearest'});}catch{} }
 }
 $('tabs').addEventListener('click',(e)=>{
