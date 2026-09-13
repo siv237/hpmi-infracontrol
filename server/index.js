@@ -527,40 +527,44 @@ const server = http.createServer(async (req, res) => {
     let cfg;
     try { cfg = body.serverId ? await getServer(body.serverId) : body; } catch { return json(res, 400, { ok: false, error: 'local read failed' }); }
     if (!cfg) return json(res, 400, { ok: false, error: 'server not found' });
-    // Prefer authenticated inventory (model/serial/BIOS/OS), fall back to probe.
+    // Инвентарь: веб (модель/BIOS/OS) + IPMI (FRU/mc info) — ОБЪЕДИНЯЕМ.
+    // Для iRMC S4 веб-инвентарь пуст (нет веб-сессии для контента) — тогда
+    // данные целиком берутся из IPMI. Веб-значения приоритетнее при совпадении.
+    let invMap = {};
+    let source = 'web';
     try {
       const inv = await inventory(cfg);
-      const invMap = inv.inventory || {};
+      invMap = inv.inventory || {};
+    } catch { /* веб-инвентарь недоступен — доберём из IPMI */ }
+    try {
+      const ipmiMap = await ipmi.ipmiInventory({ host: cfg.host, username: cfg.username, password: cfg.password || '' });
+      let added = 0;
+      for (const [k, v] of Object.entries(ipmiMap || {})) {
+        if (v === undefined || v === null || v === '') continue;
+        if (!(k in invMap) || !invMap[k]) { invMap[k] = v; added++; }
+      }
+      const total = Object.keys(invMap).length;
+      if (!total) source = 'none';
+      else if (added === total) source = 'ipmi';
+      else if (added > 0) source = 'web+ipmi';
+    } catch { if (!Object.keys(invMap).length) source = 'none'; }
+
+    if (Object.keys(invMap).length) {
       let configChanges = [];
       if (body.serverId) {
         // фактическое подключение: снимок + история версий + событие
         configChanges = db.saveSnapshot(body.serverId, invMap).changes;
         db.recordVersionSnapshot(body.serverId, invMap, req.user?.login || null);
-        db.addEvent(body.serverId, 'info', `Данные iRMC получены (${cfg.name || cfg.host})`);
+        db.addEvent(body.serverId, 'info', `Данные iRMC получены [${source}] (${cfg.name || cfg.host})`);
         for (const c of configChanges) db.addEvent(body.serverId, 'warn', `Изменение конфигурации · ${c.field}: ${c.from} → ${c.to}`);
       }
-      return json(res, 200, { ok: true, inventory: invMap, configChanges, ...inv });
-    } catch {
-      // Веб-инвентарь недоступен (iRMC S4: Digest-сессии нет) — fallback
-      // на IPMI: FRU-области + mc info дают модель/серийник/BMC/MAC.
-      try {
-        const opts = { host: cfg.host, username: cfg.username, password: cfg.password || '' };
-        const invMap = await ipmi.ipmiInventory(opts);
-        if (Object.keys(invMap).length) {
-          let configChanges = [];
-          if (body.serverId) {
-            configChanges = db.saveSnapshot(body.serverId, invMap).changes;
-            db.recordVersionSnapshot(body.serverId, invMap, req.user?.login || null);
-            db.addEvent(body.serverId, 'info', `Данные IPMI получены — веб-инвентарь недоступен (${cfg.name || cfg.host})`);
-          }
-          return json(res, 200, { ok: true, inventory: invMap, configChanges, source: 'ipmi' });
-        }
-      } catch { /* IPMI тоже не смог — ниже общий probe */ }
-      try {
-        const p = await probe(cfg);
-        return json(res, 200, p);
-      } catch (e) { return json(res, 200, { ok: false, error: String(e.message || e) }); }
+      return json(res, 200, { ok: true, inventory: invMap, configChanges, source });
     }
+    // Ни веб, ни IPMI не дали данных — общий probe (метаданные/доступность).
+    try {
+      const p = await probe(cfg);
+      return json(res, 200, p);
+    } catch (e) { return json(res, 200, { ok: false, error: String(e.message || e) }); }
   }
 
   // Офлайн-данные: последний снимок инвентаря сервера (из БД)

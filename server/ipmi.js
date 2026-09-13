@@ -126,6 +126,22 @@ export async function readChassis(opts) {
   };
 }
 
+// Системная информация BMC (`mc getsysinfo`/`mc guid`): имя системы, ОС,
+// версия системной прошивки (BIOS), System GUID (UUID). Read-only, без SDR/SEL.
+export async function readSysInfo(opts) {
+  const { host, username, password } = opts;
+  const base = ['-I', 'lanplus', '-H', host, '-U', username, '-P', password || ''];
+  const env = { ...process.env, IPMITOOL_PASS: password || '' };
+  const [name, osName, fw, guidOut] = await Promise.all([
+    run(base, ['mc', 'getsysinfo', 'system_name'], env, 8000),
+    run(base, ['mc', 'getsysinfo', 'primary_os_name'], env, 8000),
+    run(base, ['mc', 'getsysinfo', 'system_fw_version'], env, 8000),
+    run(base, ['mc', 'guid'], env, 8000),
+  ]);
+  const uuid = (/System GUID\s*:\s*([0-9a-fA-F-]{16,})/.exec(guidOut || '') || [])[1] || '';
+  return { host, name: String(name || '').trim(), osName: String(osName || '').trim(), fw: String(fw || '').trim(), uuid };
+}
+
 // Инвентарь FRU (производитель/модель/серийник/version). Строки «key : value».
 export async function readFru(opts) {
   // Обход всех FRU-областей (0..5): у PRIMERGY/iRMC S4 данные разложены
@@ -156,10 +172,11 @@ export async function readFru(opts) {
 // FRU-области + mc info + chassis power. Ключи совместимы с веб-инвентарём
 // S2 (detail.js SI_ROWS), чтобы фронт не менялся.
 export async function ipmiInventory(opts) {
-  const [fruR, qc, chassis] = await Promise.all([
+  const [fruR, qc, chassis, sysinfo] = await Promise.all([
     readFru(opts).catch(() => ({ fru: {} })),
     quickCheck(opts).catch(() => null),
     readChassis(opts).catch(() => ({ power: null })),
+    readSysInfo(opts).catch(() => ({})),
   ]);
   const fru = fruR.fru || {};
   const inv = {};
@@ -169,7 +186,10 @@ export async function ipmiInventory(opts) {
   put('Model', fru['product name'] || fru['board product'] || '');
   put('Serial Number', fru['product serial'] || fru['chassis serial'] || fru['board serial'] || '');
   put('Asset Tag', fru['product asset tag'] || '');
-  put('BIOS Version', fru['bios version'] || '');
+  put('BIOS Version', fru['bios version'] || sysinfo.fw || '');
+  put('UUID', sysinfo.uuid || '');
+  put('System Name', sysinfo.name || '');
+  put('OS', sysinfo.osName || '');
   if (qc && qc.ipmi) {
     put('BMC', qc.ipmi.bmcFirmware || '');
     put('IPMI Firmware', 'IPMI ' + (qc.ipmi.ipmiVersion || '') + ' · ' + (qc.ipmi.manufacturer || '') + ' · BMC ' + (qc.ipmi.bmcFirmware || ''));
@@ -178,6 +198,10 @@ export async function ipmiInventory(opts) {
     if (qc.lan.mac) put('MAC', qc.lan.mac);
     if (qc.lan.ip) put('System IP', qc.lan.ip);
   }
+  // Индикаторы из chassis status: питание и наличие неисправностей.
+  if (chassis && chassis.power) put('Power LED', chassis.power === 'on' ? 'Вкл' : 'Выкл');
+  const anyFault = chassis && chassis.faults && Object.values(chassis.faults).some(Boolean);
+  put('Error LED', anyFault ? 'Есть неисправность' : 'Норма');
   const board = [];
   if (fru['board product']) board.push('Board: ' + fru['board product'] + (fru['board part number'] ? ' (' + fru['board part number'] + ')' : ''));
   if (fru['board mfg date']) board.push('Board date: ' + fru['board mfg date']);

@@ -1231,3 +1231,27 @@ S2(10.67.17.101)→mahogany-avr, S4(042)→ami-soc; npm test 30 pass/1 skip;
    на TLS-порт 443 → поток рвался, кадров нет. Фикс: secure = sessiontype
    содержит 'ssl'. Проверено: handshake MAHOGANY KVMS LBW, firmware iRMC S2
    5.77A, vesa:1024x768@32, кадры идут.
+
+## [2026-09-13] fix | «Информация о системе» для S4 — брать из IPMI
+Симптом: для dgk51srv042 (S4) вкладка «Информация о системе» пустая.
+Причина: /api/info сначала звал веб-инвентарь (inventory); для S4 он НЕ падает,
+а возвращает ok с 0 полей — поэтому fallback на IPMI не срабатывал, отдавался
+пустой инвентарь. При этом IPMI даёт 9 полей (Manufacturer/Model/Serial/BMC/
+IPMI Firmware/MAC/System IP/Asset Tag/Description).
+Фикс /api/info: инвентарь = веб + IPMI ОБЪЕДИНЯЕМ; IPMI добирает недостающие
+поля (MAC/IPMI-firmware и т.п.), а если веб пуст (S4) — данные целиком из IPMI.
+Веб-значения приоритетнее при совпадении. В ответ добавлено source
+(web / ipmi / web+ipmi). Фронт (renderSI) отображает IPMI-ключи корректно.
+Проверено: web=0 полей, ipmi=9 → source=ipmi; npm test 31 pass.
+
+## [2026-09-13] feat | больше инфо из IPMI (S4): BIOS/OS/имя/UUID/LED
+Владелец: для dgk51srv042 (S4) собрано мало — расширили IPMI-инвентарь.
+Добавлено в server/ipmi.js:
+- readSysInfo(): `mc getsysinfo system_name` (имя системы), `primary_os_name`
+  (ОС), `system_fw_version` (BIOS/системная прошивка), `mc guid` (System GUID).
+- ipmiInventory(): поля BIOS Version, UUID, System Name, OS; из chassis status —
+  Power LED (Вкл/Выкл) и Error LED (Есть неисправность/Норма).
+Проверено на 042: 15 полей (BIOS "V4.6.5.4 R1.9.0 for D3302-A1x", UUID
+41f9119a-…, System Name DGK51SRV042, OS "Windows Server 2012 R2 Standard",
+Power LED Вкл, Error LED Норма, + прежние модель/серийник/BMC/MAC/IP/asset/
+описание). Фронт (SI_ROWS) эти ключи уже отображает. npm test 31 pass.
