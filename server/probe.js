@@ -8,7 +8,7 @@ import tls from 'node:tls';
 import http from 'node:http';
 import https from 'node:https';
 import { URL } from 'node:url';
-import { permissiveTlsOptions } from './irmc.js';
+import { permissiveTlsOptions } from './sdk/net.js';
 
 function tcpProbe(host, port, targetTls, timeoutMs = 4000) {
   return new Promise((resolve) => {

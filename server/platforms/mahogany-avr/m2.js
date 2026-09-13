@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.join(__dirname, '..');
+const ROOT = path.join(__dirname, '..', '..', '..'); // проект (server/platforms/<id> -> root)
 const M2_DIR = path.join(ROOT, 'data', 'm2');
 const SO_FILE = path.join(M2_DIR, 'LIBM2-64.SO');
 const WANT_PORT = '5901';

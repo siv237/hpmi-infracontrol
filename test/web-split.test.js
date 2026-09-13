@@ -8,7 +8,7 @@ const ROOT = '/home/siv/proj/IPMI-Viewer';
 const web = join(ROOT, 'web');
 
 const CSS_FILES = ['base.css','components.css','dashboard.css','servers.css','console.css','events.css','logs.css','ui.css'];
-const JS_FILES = ['core.js','events.js','tree.js','detail.js','ipmi.js','network.js','inventory.js','tabs.js','iso.js','users.js','groups.js','tree-controls.js','console.js','layout.js','overview.js','logs.js','auth.js','init.js'];
+const JS_FILES = ['core.js','events.js','tree.js','detail.js','ipmi.js','network.js','inventory.js','tabs.js','iso.js','users.js','groups.js','tree-controls.js','console.js','layout.js','overview.js','logs.js','templates.js','auth.js','init.js'];
 
 const idx = readFileSync(join(web, 'index.html'), 'utf8');
 const html = idx.slice(idx.indexOf('<body>'), idx.indexOf('</body>') + '</body>'.length);
@@ -85,6 +85,8 @@ const EXPECTED_FUNCTIONS = [
   'stChip','drawAvailabilityChart','loadOverview','renderOverviewRows','buildGroupFilter','startOverview',
   // logs
   'logTs','logSevChip','loadLogs','filteredLogs','renderLogs','buildLogServerFilter','selectLog','initLogsUI',
+  // templates (модули платформ)
+  'tplStatusBadge','tplChips','tplAccess','tplCapList','tplEngineBadge','tplRowHtml','tplDetailsHtml','tplGroupByVendor','renderTplModules','loadTemplates',
   // auth
   'showLogin','hideLogin','enterApp',
 ];

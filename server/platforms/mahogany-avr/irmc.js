@@ -8,8 +8,8 @@
 
 import net from 'node:net';
 import tls from 'node:tls';
-import crypto from 'node:crypto';
 import { IrmcFramebuffer } from './irmc-decode.js';
+import { permissiveTls, permissiveTlsOptions } from '../../sdk/net.js';
 
 // Command ids (client <-> server)
 const ID = {
@@ -48,28 +48,6 @@ const NEEDMORE = new NeedMore();
 const IRMC_DBG = process.env.IRMC_DEBUG === '1';
 function irmcDbg() { return IRMC_DBG; }
 
-// Permissive TLS for old iRMC firmware: allow TLS 1.0/1.1 and legacy ciphers /
-// SHA-1 signatures. Node defaults to TLSv1.2 + security level 2, which old
-// iRMC refuses (ssl_choose_client_version).
-function permissiveTls(hard) {
-  const legacyReneg =
-    (crypto.constants && crypto.constants.SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION) ||
-    0x00040000;
-  const opts = {
-    rejectUnauthorized: false,
-    minVersion: 'TLSv1',
-    maxVersion: 'TLSv1.2',
-    honorCipherOrder: true,
-    ciphers: 'ALL:!aNULL:!eNULL:!NULL:@SECLEVEL=0',
-    sigalgs: 'RSA-PSS+SHA256:RSA-PSS+SHA384:RSA-PSS+SHA512:'
-          + 'RSA+SHA1:RSA+SHA224:RSA+SHA256:RSA+SHA384:RSA+SHA512:'
-          + 'ECDSA+SHA1:ECDSA+SHA224:ECDSA+SHA256:ECDSA+SHA384:ECDSA+SHA512',
-    // Old iRMC brute-force attempts TLS renegotiation during handshake.
-    secureOptions: legacyReneg,
-  };
-  return opts;
-}
-
 class Reader {
   constructor() { this.data = Buffer.alloc(0); this.pos = 0; }
   push(c) { this.data = Buffer.concat([this.data.slice(this.pos), c]); this.pos = 0; }
@@ -85,8 +63,6 @@ class Reader {
   // set cursor back (used on rollback)
   reset(p) { this.pos = p; }
 }
-
-export function permissiveTlsOptions() { return permissiveTls(false); }
 
 export class IrmcClient {
   constructor(opts, events = {}) {

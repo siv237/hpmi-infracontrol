@@ -1181,3 +1181,40 @@ _template. index.md обновлён. Код ядра пока не тронут
 Проверено: реестр находит ami-soc impl=yes; проба на 042 даёт matched
 (Server: ...iRMC S4...); npm test 29 pass/1 skip; импорт сервера ок.
 Ждём проверки на живом 042 (консоль + ISO) и S2.
+
+## [2026-09-11] feat | вкладка «Шаблоны»: каталог модулей платформ
+В WEB-UI заполнена вкладка «Шаблоны» — видно, что предоставляет каждый шаблон
+и какие серверы к ним относятся.
+- API: GET /api/platforms (каталог из реестра) и GET /api/platforms/servers
+  (сопоставление подключённых серверов шаблонам по сигнатуре, без кредов).
+- web/js/templates.js + страница page-templates (index.html), добавлена в
+  IMPLEMENTED (layout.js). Показывает: модели/прошивки со статусом
+  (verified/experimental), возможности (KVM/носители/IPMI/инвентарь),
+  доступ (web-порты, схема входа, транспорт kvm/медиа), sdk/приоритет,
+  методы проб, статус движка (подключён/только определение).
+- Реестр listPlatforms расширен (vendor/family/access/supported/hasConsole/
+  hasMedia).
+- Добавлен ПРОБА-модуль mahogany-avr (probe.js + index.js: только probe;
+  login/консоль/медиа пока legacy ядра) — чтобы S2-серверы сопоставлялись.
+  Проба S2: WWW-Authenticate realm "iRMC S2@…" / <title>…iRMC S2…
+Проверено: matchPlatform S2→mahogany-avr, S4→ami-soc; npm test 30 pass/1 skip
+(обновлён курируемый манифест test/web-split.test.js: templates.js + функции).
+
+## [2026-09-11] refactor | S2 оформлен модулем mahogany-avr (полный перенос)
+Полный перенос S2 в плагинную архитектуру:
+- Перемещены в server/platforms/mahogany-avr/: irmc.js (консоль AVR),
+  irmc-decode.js (декодер), m2.js + m2host.py (виртуальный носитель
+  Avocent URS), stor.js (эксперим.).
+- Общий TLS-хелпер permissiveTls/permissiveTlsOptions вынесен в ядро
+  server/sdk/net.js (используют discover.js, probe.js, irmc.js).
+- module index.js: probe / login (s2Session) / createConsole (IrmcClient,
+  события 'vesa:'→'live') / createMedia (обёртка m2: start/close/stats + cfg.host).
+- login.js использует s2Session; в discover.js S2-вход выделен в экспорт
+  s2Session (ядро и модуль — без дублирования).
+- Ядро index.js: убраны legacy S2-ветка, IrmcClient и m2-импорты; и консоль,
+  и медиа — через реестр. /api/mounts/recover переписан на реальный повторный
+  realMount по сохранённым записям (вместо m2.recover). /api/mounts/stats —
+  метрики активного модуля (S4 stats / S2 m2).
+Проверено: реестр оба impl=yes (hasConsole/hasMedia true); пробы на живых
+S2(10.67.17.101)→mahogany-avr, S4(042)→ami-soc; npm test 30 pass/1 skip;
+импорт сервера ок. Ждём проверки владельцем (S2 консоль+ISO, S4 не сломан).

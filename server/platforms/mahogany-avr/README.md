@@ -1,16 +1,22 @@
 # Модуль платформы: mahogany-avr (Fujitsu iRMC S2/S3, Avocent/Mahogany)
 
-Статус: **заготовка**. Код переносится по живому железу из текущих модулей ядра.
+Статус: **реализован** (контракты probe/login/createConsole/createMedia).
+Весь платформенный код S2 перенесён из ядра; ядро использует модуль через реестр.
 
-## Что перенести (карта)
+## Файлы модуля
 
-| Сейчас (ядро) | Сюда |
-|---------------|------|
-| `server/irmc.js` | консоль AVR (ConsoleClient) |
-| `server/irmc-decode.js` | декодер видео (канон 0x00RRGGBB) |
-| `server/m2.js`, `server/m2host.py` | виртуальный носитель (Avocent URS/M2) |
-| `server/stor.js` | (эксперим.) чистый Node-URS |
-| `discover.js` (digest-сценарий) | `login()` и пробы |
+| Файл | Роль |
+|------|------|
+| `manifest.js` | supported/access/capabilities/probes |
+| `probe.js` | проба `web-signature` (Digest realm `iRMC S2@…` / `<title>…iRMC S2…`) |
+| `login.js` | схема входа S2 (переиспользует `s2Session` из ядра) |
+| `irmc.js` | консоль AVR (ConsoleClient) |
+| `irmc-decode.js` | декодер видео (канон 0x00RRGGBB) |
+| `m2.js` + `m2host.py` | виртуальный носитель Avocent URS (MediaRedirector) |
+| `stor.js` | (эксперим.) чистый Node-URS |
+| `index.js` | сборка контрактов для ядра |
+
+Общий TLS-хелпер `permissiveTlsOptions` вынесен в ядро — `server/sdk/net.js`.
 
 ## Проверено на живом железе
 

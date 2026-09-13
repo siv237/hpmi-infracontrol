@@ -63,10 +63,14 @@ export async function matchPlatform(cfg, sdk) {
 
 export async function listPlatforms() {
   const mods = await loadPlatforms();
-  return mods.map(({ manifest, dir }) => ({
-    id: manifest.id, dir, title: manifest.title, priority: manifest.priority,
-    sdk: manifest.sdk, supported: manifest.supported, capabilities: manifest.capabilities,
-    loaded: !!mods.find((m) => m.manifest.id === manifest.id).impl,
+  return mods.map(({ manifest, dir, impl }) => ({
+    id: manifest.id, dir, title: manifest.title, vendor: manifest.vendor || '',
+    family: manifest.family || '', priority: manifest.priority, sdk: manifest.sdk,
+    supported: manifest.supported || [], capabilities: manifest.capabilities || {},
+    access: manifest.access || {}, probes: manifest.probes || [],
+    loaded: !!impl,
+    hasConsole: !!(impl && typeof impl.createConsole === 'function'),
+    hasMedia: !!(impl && typeof impl.createMedia === 'function'),
   }));
 }
 

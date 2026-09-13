@@ -11,8 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { WebSocketServer } from 'ws';
-import { IrmcClient, testIrmc } from './irmc.js';
-import { matchPlatform } from './sdk/registry.js';
+import { testIrmc } from './platforms/mahogany-avr/irmc.js';
+import { matchPlatform, listPlatforms } from './sdk/registry.js';
 import * as ipmi from './ipmi.js';
 import * as db from './db.js';
 import { checkChannels, ping as pingChannel, tcpPort } from './channels.js';
@@ -25,7 +25,6 @@ import { probe } from './probe.js';
 import { attachVnc } from './vnc.js';
 import { encodePng, saveScreenshot } from './png.js';
 import * as iso from './iso.js';
-import * as m2 from './m2.js';
 
 const PORT = Number(process.env.PORT || 1845);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -138,14 +137,7 @@ function closeSession(tokenOrSess) {
 
 // digest login with retries; httpdata is NOT cached (session material, and a
 // stale token makes the AVR drop the video stream after the handshake).
-async function cachedSession(cfg) {
-  let last;
-  for (let i = 0; i < 3; i++) {
-    try { return await getSession(cfg); }
-    catch (e) { last = e; if (i === 2) throw e; await new Promise((r) => setTimeout(r, 900)); }
-  }
-  throw last;
-}
+// Используется диагностикой (/api/test); консоль/медиа логинятся через модуль.
 
 async function startSession(sess, host, user, pass, port, secure) {
   // креды держим в памяти сессии — авто-реконнект поднимает то же подключение
@@ -182,46 +174,10 @@ async function startSession(sess, host, user, pass, port, secure) {
     }, 10000);
     return sess;
   }
-  // S2 (Avocent/Mahogany): пока не оформлен модулем — старый путь ядра.
-  const cfg = await cachedSession(conn);
-  const cli = new IrmcClient(cfg, {
-    onStatus: (s) => {
-      sess.status.push(s);
-      if (s.startsWith('vesa:')) {
-        sess.state = 'live';
-        sess._retryN = 0; // связь поднята — сбрасываем счётчик реконнектов
-        const m = /^vesa:(\d+)x(\d+)@(\d+)/.exec(s);
-        if (m) { sess.width = +m[1]; sess.height = +m[2]; }
-      }
-    },
-    onError: (e) => { sess.error = e; sess.state = 'error'; scheduleReconnect(sess); },
-    onExit: () => { sess.state = 'closed'; scheduleReconnect(sess); },
-    onFrame: (fb, rects) => {
-      if (process.env.IRMC_DEBUG === '1' && (fb.width !== sess.width || fb.height !== sess.height)) {
-        console.log(`[dbg] framebuffer size ${sess.width}x${sess.height} -> ${fb.width}x${fb.height} (rects=${rects ? rects.length : 0})`);
-      }
-      sess.width = fb.width; sess.height = fb.height;
-      sess.lastFrameAt = Date.now();
-      for (const cb of sess.listeners) cb(fb, rects);
-    },
-  });
-  sess.cli = cli;
-  await cli.start();
-  // Static/black screens produce no change-frames, so the framebuffer stays
-  // blank even though the device shows content. Also, fast bursts can drop
-  // frame pieces leaving black gaps. Act as a periodic "keyframe": every 10s
-  // force the device to resend the full current screen (invalidateFull) and
-  // push a full framebuffer to every client. Resolution re-verification rides
-  // on this too: the resend is at the CURRENT mode, and on a size change the
-  // VNC layer emits DesktopSize so noVNC resizes (keeps aspect ratio).
-  sess._keyframe = setInterval(() => {
-    try {
-      if (!sess.cli) return;
-      sess.cli.invalidateFull();
-      sess.forceFull();
-    } catch {}
-  }, 10000);
-  return sess;
+  // Ни один модуль платформы не подошёл: неизвестная модель или BMC недоступен.
+  const err = new Error('не найден модуль платформы для ' + host + ' (проверьте доступность и сигнатуру BMC)');
+  sess.error = err; sess.state = 'error';
+  throw err;
 }
 
 // Перезапуск сессии НА МЕСТЕ: тот же токен и объект сессии, новый клиент iRMC.
@@ -745,10 +701,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   // === Монтирование ISO: состояние «что примонтировано» (п.10/10.5) ===
-  // Реальный проброс ISO. S4 (AMI/IVTP) — СВОЙ движок CDMEDIA (s4cmdir.js);
-  // S2 (Avocent) — нативный M2 (m2.js). Никакого смешивания.
-  // Живой KVM-клиент (IVTP) для хоста — чтобы сигналить MediaRedirectionState
-  // [24] по KVM-каналу (BMC по нему подключает/отключает виртуальные устройства).
+  // Реальный проброс ISO делегируется модулю платформы (createMedia):
+  // S4 — CDMEDIA/IUSB, S2 — нативный M2/Avocent-URS. Ядро не знает деталей.
+  // Живой KVM-клиент для хоста — чтобы сигналить MediaRedirectionState [24].
   function kvmClientForHost(host) {
     const tok = sessionsByHost.get(host);
     const s = tok ? sessions.get(tok) : null;
@@ -764,34 +719,29 @@ const server = http.createServer(async (req, res) => {
     const port = Number(cfg.port || srv.port || 80);
     const secure = !!cfg.secure || !!srv.secure;
     const conn = { host, username: user, password: pass, port, secure };
-    // Плагин решает, как монтировать (createMedia). Нет модуля — S2 legacy (m2).
+    // Плагин платформы решает, как монтировать (createMedia).
     let plat = null;
     try { plat = await matchPlatform(conn, SDK); }
     catch (e) { if (process.env.IRMC_DEBUG === '1') console.log('[platforms] probe:', e.message); }
-    if (plat && plat.impl && typeof plat.impl.createMedia === 'function') {
-      const sessionCfg = await plat.impl.login(conn, SDK);
-      if (activeCmdir) { try { activeCmdir.close(); } catch {} activeCmdir = null; }
-      const c = plat.impl.createMedia(sessionCfg, { isoPath: iso.isoPath(isoId) }, SDK);
-      activeCmdir = c;
-      await c.start();
-      // [24]=1: сообщить BMC о старте media-redirection (KVM-канал)
-      try { kvmClientForHost(host)?.mediaRedir(true); } catch {}
-      return true;
+    if (!plat || !plat.impl || typeof plat.impl.createMedia !== 'function') {
+      throw new Error('платформа не поддерживает виртуальные носители (нет модуля createMedia)');
     }
-    // S2: нативный Avocent-URS
-    return m2.share({
-      host, port,
-      sharePath: iso.isoPath(isoId),
-    });
+    const sessionCfg = await plat.impl.login(conn, SDK);
+    if (activeCmdir) { try { activeCmdir.close(); } catch {} activeCmdir = null; }
+    const c = plat.impl.createMedia(sessionCfg, { isoPath: iso.isoPath(isoId) }, SDK);
+    activeCmdir = c;
+    await c.start();
+    // [24]=1: сообщить BMC о старте media-redirection (KVM-канал), если умеет
+    try { kvmClientForHost(host)?.mediaRedir(true); } catch {}
+    return true;
   }
   function realUnmount() {
     if (activeCmdir) {
-      // [24]=0: снять виртуальные устройства у гостя
-      try { kvmClientForHost(activeCmdir.cfg.host)?.mediaRedir(false); } catch {}
+      // [24]=0: снять виртуальные устройства у гостя (если платформа умеет)
+      try { kvmClientForHost(activeCmdir.cfg && activeCmdir.cfg.host)?.mediaRedir(false); } catch {}
       try { activeCmdir.close(); } catch {}
       activeCmdir = null;
     }
-    m2.unshare();
   }
   // Список монтирований (все серверы) — с именами серверов/образов
   if (url.pathname === '/api/mounts' && req.method === 'GET') {
@@ -807,14 +757,23 @@ const server = http.createServer(async (req, res) => {
   // Живые метрики активного монтирования (активность/скорость передачи).
   // Схемы раздельные: S4 (s4-cdmedia, читает Node) и S2 (M2/Avocent-URS).
   if (url.pathname === '/api/mounts/stats' && req.method === 'GET') {
-    const stats = (activeCmdir && activeCmdir.ready) ? activeCmdir.stats() : m2.stats();
+    const stats = (activeCmdir && typeof activeCmdir.stats === 'function') ? activeCmdir.stats() : null;
     return json(res, 200, { ok: true, stats });
   }
-  // Восстановить сессию монтирования (admin): повторный share по прошлому конфигу
+  // Восстановить монтирования после рестарта: по сохранённым записям заново
+  // поднимаем редирект через модуль платформы (реально, а не «по конфигу»).
   if (url.pathname === '/api/mounts/recover' && req.method === 'POST') {
     if (req.user.role !== 'admin') return json(res, 403, { ok: false, error: 'права администратора' });
-    const r = await m2.recover();
-    return json(res, r.ok ? 200 : 409, r);
+    const mounts = await storage.getMounts();
+    const results = [];
+    for (const [serverId, m] of Object.entries(mounts)) {
+      const srv = await getServer(serverId);
+      if (!srv) { results.push({ serverId, ok: false, error: 'сервер не найден' }); continue; }
+      try { await realMount(srv, m.isoId); results.push({ serverId, ok: true, isoId: m.isoId }); }
+      catch (e) { results.push({ serverId, ok: false, error: String(e.message || e) }); }
+    }
+    const ok = results.length > 0 && results.every((r) => r.ok);
+    return json(res, ok ? 200 : 207, { ok, results });
   }
   // Метрики по IPMI (p.5): сенсоры (темп/кулеры) — из БД (последний опрос).
   // После рестарта данные сразу из базы, без «прогрева» кеша.
@@ -903,7 +862,7 @@ const server = http.createServer(async (req, res) => {
     if (!img) return json(res, 404, { ok: false, error: 'ISO не найден' });
     const stale = img.stream; try { stale.destroy(); } catch { }
     const m = await storage.setMount(body.serverId, img.meta, req.user?.login || null);
-    const real = await realMount(srv, body.isoId).catch((e) => { console.error('[mount] m2 share failed:', e.message); return false; });
+    const real = await realMount(srv, body.isoId).catch((e) => { console.error('[mount] редирект не удался:', e.message); return false; });
     db.addEvent(body.serverId, 'info', `Примонтирован ISO «${img.meta.name}» к ${srv.name || srv.host}` + (real ? '' : ' (ожидает открытой сессии)'));
     return json(res, 200, { ok: true, mount: m, real });
   }
@@ -1020,6 +979,30 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/servers' && req.method === 'GET') {
     try { return json(res, 200, { servers: await listServers(false) }); }
     catch (e) { return json(res, 500, { ok: false, error: String(e.message || e) }); }
+  }
+
+  // Каталог модулей платформ (для вкладки «Шаблоны»): что предоставляет
+  // каждый шаблон — модели/прошивки, возможности, порты/доступ, статус.
+  if (url.pathname === '/api/platforms' && req.method === 'GET') {
+    try { return json(res, 200, { ok: true, modules: await listPlatforms() }); }
+    catch (e) { return json(res, 500, { ok: false, error: String(e.message || e) }); }
+  }
+  // Сопоставление подключённых серверов шаблонам (по сигнатуре, без кредов).
+  if (url.pathname === '/api/platforms/servers' && req.method === 'GET') {
+    try {
+      const list = await listServers(false);
+      const servers = await Promise.all(list.map(async (s) => {
+        let m = null;
+        try {
+          m = await matchPlatform({ host: s.host, port: s.port || 80, secure: !!s.secure, username: s.usernamePlain || '', password: '' }, SDK);
+        } catch {}
+        return {
+          id: s.id, name: s.name || s.host, host: s.host, port: s.port || 80, secure: !!s.secure,
+          moduleId: m ? m.manifest.id : null, moduleTitle: m ? m.manifest.title : null,
+        };
+      }));
+      return json(res, 200, { ok: true, servers });
+    } catch (e) { return json(res, 500, { ok: false, error: String(e.message || e) }); }
   }
 
   if (url.pathname === '/api/servers' && req.method === 'POST') {

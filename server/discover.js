@@ -6,7 +6,7 @@ import http from 'node:http';
 import https from 'node:https';
 import crypto from 'node:crypto';
 import { URL } from 'node:url';
-import { permissiveTlsOptions } from './irmc.js';
+import { permissiveTlsOptions } from './sdk/net.js';
 
 const AVR_PARAM_KEYS = [
   'NonSecure_KVMPort', 'NonSecure_KMPort', 'NonSecure_VPort',
@@ -203,14 +203,28 @@ export async function discover(cfg) {
 //   3) Дальше все страницы ходят с sid в query; на них есть avr.jnlp.
 export async function getSession(cfg) {
   const { host, username, password, port = 80, secure = false } = cfg;
-  let root = await digestGet(secure, host, port, '/', username, password);
-  let link = /href="(avr\.jnlp\?[^"]+)"/i.exec(root.body);
+  const root = await digestGet(secure, host, port, '/', username, password);
+  const link = /href="(avr\.jnlp\?[^"]+)"/i.exec(root.body);
   // S2-путь не сработал (страница-триггер вместо контента) — пробуем S4.
   if (!link && /Login required/i.test(root.body || '')) {
     const s4 = await s4Session(cfg);
     if (s4) return s4;
   }
-  if (!link) throw new Error('no avr.jnlp link in page');
+  const s2 = await s2Session(cfg, link);
+  if (s2) return s2;
+  throw new Error('no avr.jnlp link in page');
+}
+
+// S2-вход (Avocent/Mahogany): Digest GET / → ссылка avr.jnlp → аргументы
+// (VncPort/httpdata/digest). Используется ядром и модулем mahogany-avr.
+export async function s2Session(cfg, linkArg) {
+  const { host, username, password, port = 80, secure = false } = cfg;
+  let link = linkArg;
+  if (!link) {
+    const root = await digestGet(secure, host, port, '/', username, password);
+    link = /href="(avr\.jnlp\?[^"]+)"/i.exec(root.body);
+  }
+  if (!link) return null;
   const j = await digestGet(secure, host, port, '/' + link[1].replace(/&amp;/g, '&'), username, password);
   const args = {};
   const re = /argument>([^<]*)</g;

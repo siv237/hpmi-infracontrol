@@ -375,6 +375,21 @@
         </div>
       </div>
 
+      <!-- СТРАНИЦА: ШАБЛОНЫ (модули платформ) -->
+      <div class="page" id="page-templates" style="display:none">
+        <div class="page-head">
+          <h1>Шаблоны платформ</h1>
+          <span class="count-pill" id="tplCount">0</span>
+          <div class="tools">
+            <input class="sel" id="tplSearch" placeholder="Поиск: модель, id, вендор…" style="min-width:220px">
+            <button class="tool-btn" id="tplExpandAll">Развернуть всё</button>
+            <button class="icon-btn" title="Обновить" id="tplRefreshBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button>
+          </div>
+        </div>
+        <div class="page-note">Модули поддержки серверных платформ (<b>server/platforms/*</b>): какие модели/прошивки поддержаны, возможности, порты и способ доступа. Ядро находит модули автоматически (реестр). Щёлкните шаблон, чтобы раскрыть детали и подключённые серверы.</div>
+        <div id="tplList"><div class="ov-empty">Загрузка…</div></div>
+      </div>
+
       <div class="page" id="page-users" style="display:none">
         <div class="page-head">
           <h1>Пользователи</h1>
@@ -600,6 +615,7 @@
 <script src="/js/layout.js"></script>
     <script src="/js/overview.js"></script>
     <script src="/js/logs.js"></script>
+    <script src="/js/templates.js"></script>
     <script src="/js/auth.js"></script>
 <script src="/js/init.js"></script>
 </body>

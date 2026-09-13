@@ -21,8 +21,9 @@ function showPage(id){
   if(id==='overview')startOverview();
   if(id==='logs')loadLogs();
   if(id==='groups'){initGroupsPage();loadGroupsPage();}
+  if(id==='templates')loadTemplates();
 }
-const IMPLEMENTED=new Set(['servers','users','iso','overview','logs','groups']);
+const IMPLEMENTED=new Set(['servers','users','iso','overview','logs','groups','templates']);
 document.querySelectorAll('.nav-item').forEach(n=>{
   n.onclick=()=>{
     const id=n.getAttribute('data-id');
