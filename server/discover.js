@@ -234,10 +234,13 @@ export async function s2Session(cfg, linkArg) {
     const i = a.indexOf('=');
     if (i > 0) args[a.slice(0, i).replace(/^-/, '')] = a.slice(i + 1);
   }
+  // sessiontype=kvm → AVR плейн; kvmssl → AVR по TLS (VncPort обычно 443).
+  const sessType = String(args.sessiontype || args.SessionType || args.type || '').toLowerCase();
+  const ssl = sessType.includes('ssl');
   return {
     host, username,
     port: Number(args.VncPort || port),
-    secure: false, // sessiontype=kvm -> plain
+    secure: ssl,
     httpdata: args.httpdata || '',
     digest: args.digest || '',
   };

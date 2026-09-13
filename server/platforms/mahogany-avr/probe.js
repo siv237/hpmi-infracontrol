@@ -4,14 +4,16 @@
 // S4 веб отдаёт Server: FUJITSU ServerView iRMC S4 Webserver — не наш.
 import http from 'node:http';
 import https from 'node:https';
+import { permissiveTlsOptions } from '../../sdk/net.js';
 
 function fetchRoot(cfg, timeoutMs = 4000) {
   const { host, port = 80, secure = false } = cfg;
   const mod = secure ? https : http;
+  const tlsOpts = secure ? permissiveTlsOptions() : {};
   return new Promise((resolve) => {
     const done = (o) => { try { req.destroy(); } catch {} resolve(o); };
     const req = mod.get(
-      { host, port, path: '/', rejectUnauthorized: false, headers: { 'User-Agent': 'Mozilla/5.0' } },
+      { host, port, path: '/', ...tlsOpts, headers: { 'User-Agent': 'Mozilla/5.0' } },
       (res) => {
         let body = '';
         res.setEncoding('latin1');

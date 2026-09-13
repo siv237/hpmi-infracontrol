@@ -1218,3 +1218,16 @@ _template. index.md обновлён. Код ядра пока не тронут
 Проверено: реестр оба impl=yes (hasConsole/hasMedia true); пробы на живых
 S2(10.67.17.101)→mahogany-avr, S4(042)→ami-soc; npm test 30 pass/1 skip;
 импорт сервера ок. Ждём проверки владельцем (S2 консоль+ISO, S4 не сломан).
+
+## [2026-09-13] fix | HTTPS-BMC: пробы (permissive TLS) и S2 kvmssl-консоль
+1) «Не определён» во вкладке Шаблоны для BMC по HTTPS (10.112.17.16:443,
+   iRMC S2): пробы mahogany-avr/ami-soc делали https-запрос без «пермиссивных»
+   TLS-опций (старый iRMC требует TLS1.0/1.1 + legacy-шифры) → рукопожатие
+   падало. Фикс: обе пробы используют permissiveTlsOptions() из sdk/net.js.
+   Проверено: 10.112.17.16:443 → mahogany-avr.
+2) Консоль не цеплялась к BMC с HTTPS (10.112.17.16, запись secure=true):
+   avr.jnlp отдаёт -sessiontype=kvmssl, -VncPort=443. s2Session жёстко ставил
+   secure:false (было «sessiontype=kvm -> plain») → IrmcClient шёл плейн TCP
+   на TLS-порт 443 → поток рвался, кадров нет. Фикс: secure = sessiontype
+   содержит 'ssl'. Проверено: handshake MAHOGANY KVMS LBW, firmware iRMC S2
+   5.77A, vesa:1024x768@32, кадры идут.
