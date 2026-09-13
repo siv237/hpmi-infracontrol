@@ -1275,3 +1275,17 @@ Power LED Вкл, Error LED Норма, + прежние модель/серий
 Проверено на 042: 2 CPU, 8 DIMM, 14 фанов, RAID Controller, PSU1/PSU2
 (55°/54°, 48 Вт), Total 96 Вт, Fully Redundant, 6 FRU-устройств
 (Chassis/MainBoard/MegaRAID/PSU1/PSU2). npm test 30 pass/1 skip.
+
+## [2026-09-13] fix | Журналы (SEL) offline-first из БД
+Владелец: журналы тоже пропадали — принцип как с железом: собираем и пишем в
+базу при новых данных, но открываем ВСЕГДА из базы (даже с мёртвого сервера).
+Причина пропадания: recordPoll перезаписывал sel_last.events значением
+r.events || [] — пустой SEL-ответ (сбой чтения SEL) СТИРАЛ последний снимок.
+Фиксы:
+- db.recordPoll: sel_last обновляется как fru/net — при excluded.events='[]'
+  оставляем прежние events и ts (пустой ответ не затирает журнал).
+- db.getSelEvents(serverId): чтение из НАКОПИТЕЛЬНОЙ sel_events (дедуп по
+  индексу, ничем не стирается) — durable-источник журнала.
+- /api/ipmi/sel: отдаёт накопленные sel_events (доступны и при недоступном
+  сервере), при отсутствии — снимок последнего опроса (pollCache.sel_last).
+Проверено: recordPollFailure журнал не трогает; npm test OK.

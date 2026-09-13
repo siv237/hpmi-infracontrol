@@ -283,7 +283,12 @@ export function recordPoll(serverId, r, durationMs, ts = Date.now(), channels = 
       const info = insSel.run(serverId, ev.id || '', ev.ts || '', ev.sensor || '', ev.detail || '', ev.category || 'other', ev.level || 'info', ts);
       if (info.changes > 0) { result.newSel++; newSelEvents.push(ev); }
     }
-    db.prepare('INSERT INTO sel_last (server_id, ts, events) VALUES (?,?,?) ON CONFLICT(server_id) DO UPDATE SET ts=excluded.ts, events=excluded.events')
+    // Не затираем последний снимок пустым результатом: пустой SEL-ответ может
+    // означать сбой чтения SEL — журнал должен сохраниться (offline-first).
+    db.prepare(`INSERT INTO sel_last (server_id, ts, events) VALUES (?,?,?)
+      ON CONFLICT(server_id) DO UPDATE SET
+        ts=CASE WHEN excluded.events='[]' THEN sel_last.ts ELSE excluded.ts END,
+        events=CASE WHEN excluded.events='[]' THEN sel_last.events ELSE excluded.events END`)
       .run(serverId, ts, JSON.stringify(r.events || []));
 
     // 4. Журнал опросов
@@ -590,6 +595,18 @@ export function pollCache(serverId) {
       ipmi: { ok: !!st.up },
     },
     net: (() => { try { return JSON.parse(st.net || '{}'); } catch { return {}; } })(),
+  };
+}
+
+// Накопленные SEL-события сервера (durable): журнал читается отсюда и
+// сохраняется, даже если сервер недоступен. Дедуп обеспечен индексом.
+export function getSelEvents(serverId, limit = 500) {
+  if (!db) initDb();
+  const rows = db.prepare('SELECT sel_id, sel_ts, sensor, detail, category, level, first_seen FROM sel_events WHERE server_id=? ORDER BY first_seen DESC, id DESC LIMIT ?').all(serverId, limit);
+  if (!rows.length) return { events: [], ts: null };
+  return {
+    events: rows.map((r) => ({ id: r.sel_id, ts: r.sel_ts, sensor: r.sensor, detail: r.detail, category: r.category || 'other', level: r.level || 'info' })),
+    ts: new Date(rows[0].first_seen).toISOString(),
   };
 }
 

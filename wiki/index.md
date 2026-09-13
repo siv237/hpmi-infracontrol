@@ -48,6 +48,8 @@ LLM Wiki проекта iRMC Viewer (этап 1). Страницы в `wiki/`, �
   (`server/platforms/<id>/`), контракты ядра, канон пикселей, границы
   «ядро ↔ модуль», чеклист. Каркас: `server/platforms/README.md`,
   `server/sdk/` (contracts + registry).
+- [knowledge/backlog.md](knowledge/backlog.md) — отложенные задачи
+  (ретенция данных к «Параметрам сервера», растворение bmc-registry и пр.).
 - [knowledge/server-deploy.md](knowledge/server-deploy.md) — ⚙ служебная
   (вне git): спецификация сервера деплоя (OS, сеть, репозитории, установленный
   софт, что ставит deploy.sh).

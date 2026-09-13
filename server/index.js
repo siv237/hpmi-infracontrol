@@ -824,12 +824,20 @@ const server = http.createServer(async (req, res) => {
     const serverId = new URL(req.url, 'http://x').searchParams.get('serverId');
     const list = await listServers(false);
     if (serverId) {
+      // Журнал читаем из НАКОПЛЕННЫХ событий (durable) — доступен и при
+      // недоступном сервере; иначе — снимок последнего опроса.
+      const sel = db.getSelEvents(serverId);
+      if (sel.events.length) return json(res, 200, { ok: true, events: sel.events, ts: sel.ts });
       const c = db.pollCache(serverId);
       if (c) return json(res, 200, { ok: true, events: c.events || [], ts: c.ts });
       return json(res, 404, { ok: false, error: 'нет данных опроса' });
     }
     const out = {};
-    for (const s of list) { const c = db.pollCache(s.id); if (c) out[s.id] = c.events || []; }
+    for (const s of list) {
+      const sel = db.getSelEvents(s.id);
+      if (sel.events.length) { out[s.id] = sel.events; continue; }
+      const c = db.pollCache(s.id); if (c) out[s.id] = c.events || [];
+    }
     return json(res, 200, { ok: true, sel: out });
   }
   // Питание/здоровье (chassis) — из БД
