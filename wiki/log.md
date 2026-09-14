@@ -1306,3 +1306,49 @@ r.events || [] — пустой SEL-ответ (сбой чтения SEL) СТ�
   или всем), updateLogBadges() (logs=непрочитанные, alerts=непрочитанные
   критические) + авто-обновление раз в 60с. test/web-split обновлён.
 npm test OK.
+
+## [2026-09-14] deploy | боевой деплой + единый стек Node 24
+Деплой на dgk00srv206r (root@dgk00srv206r, RED OS 8, без интернета).
+Проблема: локальный Node 18 vs серверный Node 24 -> лучше-sqlite3 пересобирался
+на сервере (долго, офлайн на грани, npm 11 ломает --build-from-source).
+Решение (единый стек):
+- .nvmrc=24.18.0, engines=24.18.0; Node 24 скачан локально в .cache/node24;
+  npm install под Node 24 -> node_modules с нужным ABI; в бандле готовый
+  node_modules, на сервере REBUILD_SQLITE=0 (сборки нет).
+- start.sh: подхватывает .cache/node24, предупреждает о версии; не падает при
+  отсутствии каталога (set -o pipefail).
+- package.json test -> node --test test/*.test.js (Node 24 не принимает каталог).
+- server/index.js: listen(HOST=127.0.0.1) — наружу только nginx (было *:1845).
+- deploy.sh: curl-проверки с --max-time и корректным URL.
+Итог: infracontrol active, Node 127.0.0.1:1845, nginx https 200, наружу только
+443. Коммит 7e8ba53.
+
+## [2026-09-14] ingest | HP-платформы (форк yuristwood) — только новые папки
+Забраны HP-наработки из форка yuristwood/hpmi-infracontrol (6 уникальных
+коммитов поверх 85ed91b) и упакованы как САМОДОСТАТОЧНЫЕ модули платформ.
+Ядро НЕ изменено (правило: ядро неприкосновенно; HP-специфику не навязываем
+другим платформам).
+ВАЖНО — регрессия и откат: первая попытка вынесла общий AVR-движок в
+server/sdk/avr/ с HP-поведением БЕЗУСЛОВНО и подключила его к mahogany-avr —
+это сломало ввод на Fujitsu S2 (PRIMERGY RX300 S6): гейт клавиш по view-only
++ RequestPrimaryControl без payload. ПОЛНОСТЬЮ ОТКАЧЕНО: оригинальные
+platforms/mahogany-avr/irmc.js и irmc-decode.js восстановлены из HEAD, все
+правки ядра сняты.
+Итог (только новые папки):
+- server/platforms/hp-lo100/ — KVM Lights-Out 100/LO100i: manifest, probe
+  (BMC HTTP Server/kvms.html), login (fetchKvmApplet + sessionCfg), index
+  (createConsole), СВОЙ движок avr/irmc.js + avr/irmc-decode.js (pad 16/20/128,
+  httpdata-токен, view-only фикс), test.js.
+- server/platforms/hp-ilo/ — HPE iLO 4/5: manifest, probe (EOV-GUI/RpPageHeader,
+  Oem.Hp), index (probe-only), redfish.js (библиотека Redfish: readAll +
+  чистые парсеры), test.js. НЕ подключён к поллеру — требует отдельного
+  согласованного хука в ядре (при отказе IPMI -> capabilities.redfish).
+- Ядро (index.js, ipmi.js, db.js, vnc.js, bmc-registry.js, sdk/net.js,
+  platforms/mahogany-avr/*, web/js/ipmi.js) — правок нет (git status чист).
+- Wiki: hp-lo100-kvm.md, hp-lo100i-m2.md, hp-ilo-redfish.md + index.md.
+Незабранное из форка: изменения ядра (redfish-фолбэк в pollSensors, throw на
+пустом lan print, units в db/web, кириллица в vnc.js, CAP.REDFISH) — не
+применяем без явного разрешения владельца; и форк отстал от main (registry.js,
+web templates/logs/detail, dev-env.md, test-фикс — у нас уже есть).
+Проверка: node --test server/platforms/hp-lo100/test.js и
+server/platforms/hp-ilo/test.js; git status — ядро чисто.

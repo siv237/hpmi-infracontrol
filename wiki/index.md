@@ -48,6 +48,16 @@ LLM Wiki проекта iRMC Viewer (этап 1). Страницы в `wiki/`, �
   (`server/platforms/<id>/`), контракты ядра, канон пикселей, границы
   «ядро ↔ модуль», чеклист. Каркас: `server/platforms/README.md`,
   `server/sdk/` (contracts + registry).
+- [knowledge/hp-lo100-kvm.md](knowledge/hp-lo100-kvm.md) — HP Lights-Out 100/
+  LO100i (ProLiant G5/G6): KVM по протоколу Mahogany (тот же AVR, что iRMC S2),
+  httpdata-токен из kvms.html, паддинги 16/20/128, view-only quirk; модуль
+  `platforms/hp-lo100/`.
+- [knowledge/hp-lo100i-m2.md](knowledge/hp-lo100i-m2.md) — разбор raw/M2.JAR
+  (HP LO100i, DL180 G6): MahoganyViewer, рукопожатие, паддинги, нативный
+  движок LIBM2 (проброс ISO).
+- [knowledge/hp-ilo-redfish.md](knowledge/hp-ilo-redfish.md) — HPE iLO 4/5:
+  опрос по Redfish (`server/redfish.js`), когда RMCP+ выключен (живой baspx03);
+  capability-driven фолбэк в `pollSensors`, квёрки iLO 4 fw 2.80.
 - [knowledge/backlog.md](knowledge/backlog.md) — отложенные задачи
   (ретенция данных к «Параметрам сервера», растворение bmc-registry и пр.).
 - [knowledge/server-deploy.md](knowledge/server-deploy.md) — ⚙ служебная
