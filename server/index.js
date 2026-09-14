@@ -823,22 +823,55 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/ipmi/sel' && req.method === 'GET') {
     const serverId = new URL(req.url, 'http://x').searchParams.get('serverId');
     const list = await listServers(false);
+    // Модель сервера (для поиска ошибок) — из БД: инвентарь или FRU.
+    const modelOf = (id) => {
+      try {
+        const lk = db.getLastKnown(id);
+        const inv = (lk && lk.inventory) || {};
+        const m = inv['Model'] || inv['Product Name'] || inv['System Type'] || inv['Model Name'];
+        if (m) return String(m);
+      } catch {}
+      try {
+        const pc = db.pollCache(id);
+        const fr = (pc && pc.fru) || {};
+        const m = fr['product name'] || fr['Product Name'] || fr['board product'];
+        if (m) return String(m);
+      } catch {}
+      return '';
+    };
     if (serverId) {
       // Журнал читаем из НАКОПЛЕННЫХ событий (durable) — доступен и при
       // недоступном сервере; иначе — снимок последнего опроса.
+      const model = modelOf(serverId);
       const sel = db.getSelEvents(serverId);
-      if (sel.events.length) return json(res, 200, { ok: true, events: sel.events, ts: sel.ts });
+      if (sel.events.length) return json(res, 200, { ok: true, events: sel.events, ts: sel.ts, model });
       const c = db.pollCache(serverId);
-      if (c) return json(res, 200, { ok: true, events: c.events || [], ts: c.ts });
+      if (c) return json(res, 200, { ok: true, events: c.events || [], ts: c.ts, model });
       return json(res, 404, { ok: false, error: 'нет данных опроса' });
     }
-    const out = {};
+    const out = {}, models = {};
     for (const s of list) {
+      models[s.id] = modelOf(s.id);
       const sel = db.getSelEvents(s.id);
       if (sel.events.length) { out[s.id] = sel.events; continue; }
       const c = db.pollCache(s.id); if (c) out[s.id] = c.events || [];
     }
-    return json(res, 200, { ok: true, sel: out });
+    return json(res, 200, { ok: true, sel: out, models });
+  }
+  // Отметка «просмотрено»: одно событие {serverId,id,ts,read} или всё {all,serverId?}.
+  if (url.pathname === '/api/sel/read' && req.method === 'POST') {
+    const body = await readJson(req, res);
+    if (!body) return;
+    const read = (body.read === 0 || body.read === false) ? 0 : 1;
+    let changed = 0;
+    if (body.all) changed = db.markAllSelRead(body.serverId || null, read);
+    else if (body.serverId && body.id != null && body.ts != null) changed = db.markSelRead(body.serverId, String(body.id), String(body.ts), read);
+    else return json(res, 400, { ok: false, error: 'нужны serverId+id+ts или all' });
+    return json(res, 200, { ok: true, changed, unread: db.unreadSel() });
+  }
+  // Счётчики непрочитанных (бейджи «Журналы»/«Оповещения»).
+  if (url.pathname === '/api/sel/unread' && req.method === 'GET') {
+    return json(res, 200, { ok: true, ...db.unreadSel() });
   }
   // Питание/здоровье (chassis) — из БД
   if (url.pathname === '/api/ipmi/chassis' && req.method === 'GET') {

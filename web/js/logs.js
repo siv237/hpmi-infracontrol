@@ -11,7 +11,7 @@ const SEV_ICON={
 };
 const SEV_STYLE={critical:'red',warning:'amber',info:'info',default:'gray'};
 
-let logsAll=[], logsSrvMap={}, logSev='', logDate='', logCat='', logSrv='', logPage=1, logPer=10, logSel=null;
+let logsAll=[], logsSrvMap={}, logsModels={}, logSev='', logDate='', logCat='', logSrv='', logPage=1, logPer=10, logSel=null, logUnreadOnly=false;
 
 // SEL ts приходит «MM/DD/YYYY HH:MM:SS» (англ.) — привести к Date / метке.
 function logTs(t){
@@ -28,7 +28,7 @@ function logSevChip(sev){
 async function loadLogs(){
   const r=await api('/api/ipmi/sel',{_noKick:true});
   const srv=await api('/api/servers',{_noKick:true});
-  logsSrvMap={};
+  logsSrvMap={}; logsModels=(r&&r.models)||{};
   (srv.servers||[]).forEach(s=>{logsSrvMap[s.id]={name:s.name||s.host,host:s.host||'',group:s.group||''};});
   // культурно: даже без /api/servers событие покажет сервер по id
   const byId=(r&&r.sel)||{};
@@ -39,7 +39,7 @@ async function loadLogs(){
       const t=logTs(e.ts);
       rows.push({serverId,serverName:meta.name,serverHost:meta.host,serverGroup:meta.group,
         id:e.id,ts:e.ts,ms:t.ms,tsLabel:t.label,sensor:e.sensor||'',detail:e.detail||'',
-        category:(''+e.category||'other'),level:e.level||'info',sev:(e.level||'info')});
+        category:(''+e.category||'other'),level:e.level||'info',sev:(e.level||'info'),read:e.read?1:0});
     }
   }
   rows.sort((a,b)=>b.ms-a.ms);
@@ -50,15 +50,17 @@ async function loadLogs(){
   for(const r of rows){
     const k=r.serverId+'|'+r.ms+'|'+r.sensor+'|'+r.detail+'|'+r.sev;
     const ex=keyed.get(k);
-    if(ex){ex.count=(ex.count||1)+1;continue;}
+    if(ex){ex.count=(ex.count||1)+1;if(!r.read)ex.read=0;continue;}
     r.count=1;keyed.set(k,r);
   }
   logsAll=[...keyed.values()];
   renderLogs();
+  updateLogBadges();
 }
 function filteredLogs(){
   const now=Date.now(), day=86400000;
   return logsAll.filter(r=>{
+    if(logUnreadOnly && r.read)return false;
     if(logSev && r.sev!==logSev)return false;
     if(logCat && r.category!==logCat)return false;
     if(logSrv && r.serverId!==logSrv)return false;
@@ -83,15 +85,21 @@ function renderLogs(){
   const from=(logPage-1)*logPer, to=Math.min(rows.length,from+logPer);
   const slice=rows.slice(from,to);
   $('logsRows').innerHTML=slice.length?slice.map(r=>{
-    const selCls=(logSel&&logSel.id===r.id&&logSel.serverId===r.serverId)?' style="background:var(--accent-bg)"':'';
-    return '<tr data-d="'+esc(JSON.stringify(r))+'"'+selCls+'>'
-      +'<td>'+r.tsLabel+(r.count&&r.count>1?(' <span class="logs-dup" title="Повторяющихся записей: '+r.count+'">×'+r.count+'</span>'):'')+'</td>'
+    const isSel=(logSel&&logSel.id===r.id&&logSel.serverId===r.serverId);
+    const style=[(!r.read?'font-weight:600':''),(isSel?'background:var(--accent-bg)':'')].filter(Boolean).join(';');
+    const key=r.serverId+'|'+r.id+'|'+r.ts;
+    const dot='<span data-key="'+esc(key)+'" title="'+(r.read?'Прочитано — снять отметку':'Новое — отметить прочитанным')+'" style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle;cursor:pointer;background:'+(r.read?'#c3cad6':'#e53e3e')+'"></span>';
+    return '<tr data-d="'+esc(JSON.stringify(r))+'"'+(style?' style="'+style+'"':'')+'>'
+      +'<td>'+dot+r.tsLabel+(r.count&&r.count>1?(' <span class="logs-dup" title="Повторяющихся записей: '+r.count+'">×'+r.count+'</span>'):'')+'</td>'
       +'<td>'+esc(r.sensor)+(r.detail?('<div style="color:var(--muted);font-size:11.5px;white-space:normal">'+esc(r.detail)+'</div>'):'')+'</td>'
       +'<td>'+esc(r.serverName)+(r.serverGroup?('<div style="color:var(--muted);font-size:11.5px">'+esc(r.serverGroup)+'</div>'):'')+'</td>'
       +'<td>'+logSevChip(r.sev)+'</td></tr>';
   }).join(''):'<tr><td colspan="4" class="ov-empty">Записей нет</td></tr>';
   $('logsRows').querySelectorAll('tr[data-d]').forEach(tr=>{
     tr.onclick=()=>{const o=JSON.parse(tr.getAttribute('data-d'));selectLog(o);};
+  });
+  $('logsRows').querySelectorAll('span[data-key]').forEach(d=>{
+    d.onclick=(e)=>{e.stopPropagation();const p=d.getAttribute('data-key').split('|');toggleSelRead(p[0],p[1],p.slice(2).join('|'));};
   });
   $('logsRange').textContent='Показано '+from+'−'+to+' из '+rows.length;
   const pgs=$('logsPages');
@@ -127,6 +135,7 @@ function selectLog(o){
   $('ldTitle').textContent=o.sensor||'Событие';
   $('ldSub').textContent=o.serverName+(o.serverHost?(' · '+o.serverHost):'');
   $('ldWhen').textContent=o.tsLabel;
+  const ack=$('ldAckBtn'); if(ack)ack.textContent=o.read?'Снять':'Подтвердить';
   $('ldDesc').textContent=o.detail||'Без описания';
   // Основная информация
   const cat=CAT_LABEL[o.category]||o.category;
@@ -150,6 +159,27 @@ function selectLog(o){
 // Комментарии — in-memory (не персистятся; в БД нет такого поля). При желании
 // можно вынести в storage.addEvent('info', ...) — пока локально на сессию.
 const logCommentCache={};
+// Бейджи «Журналы» и «Оповещения» — только НЕПРОЧИТАННЫЕ КРИТИЧЕСКИЕ события
+// (предупреждения/информационные в бейдже не показываем — они не «аварии»).
+async function updateLogBadges(){
+  const j=await api('/api/sel/unread',{_noKick:true});
+  if(!j||!j.ok)return;
+  const set=(id,v)=>{const e=$(id);if(!e)return;if(v>0){e.textContent=v;e.style.display='';}else{e.style.display='none';}};
+  set('logsBadge', j.critical||0);
+  set('alertsBadge', j.critical||0);
+}
+// Индивидуальная отметка «просмотрено» (клик по точке у события).
+async function toggleSelRead(sid,id,ts){
+  const row=logsAll.find(r=>r.serverId===sid&&String(r.id)===String(id)&&r.ts===ts);
+  const read=(row&&row.read)?0:1;
+  const j=await api('/api/sel/read',{method:'POST',body:JSON.stringify({serverId:sid,id,ts,read})});
+  if(j&&j.ok&&row)row.read=read;
+  if(logSel&&logSel.serverId===sid&&String(logSel.id)===String(id)&&logSel.ts===ts){
+    logSel.read=read;
+    const ack=$('ldAckBtn'); if(ack)ack.textContent=read?'Снять':'Подтвердить';
+  }
+  renderLogs(); updateLogBadges();
+}
 function initLogsUI(){
   document.querySelectorAll('#logsChips .lp-chip').forEach(ch=>{
     ch.onclick=()=>{
@@ -163,6 +193,14 @@ function initLogsUI(){
   $('logsPerPage').onchange=()=>{logPer=+$('logsPerPage').value;logPage=1;renderLogs();};
   $('logsResetBtn').onclick=()=>{logSev='';logDate='';logCat='';logSrv='';$('logsDate').value='';$('logsCat').value='';$('logsServer').value='';logPage=1;document.querySelectorAll('#logsChips .lp-chip').forEach(x=>x.classList.toggle('active',x.getAttribute('data-sev')===''));renderLogs();};
   $('logsRefreshBtn').onclick=()=>loadLogs();
+  // Только непрочитанные (новые) — переключатель.
+  $('logsUnreadBtn').onclick=()=>{ logUnreadOnly=!logUnreadOnly; $('logsUnreadBtn').classList.toggle('primary',logUnreadOnly); logPage=1; renderLogs(); };
+  // Отметить всё просмотренным (по выбранному серверу, иначе по всем).
+  $('logsReadAllBtn').onclick=async()=>{
+    const body={all:true,read:1}; if(logSrv)body.serverId=logSrv;
+    const j=await api('/api/sel/read',{method:'POST',body:JSON.stringify(body)});
+    if(j&&j.ok){ logsAll.forEach(r=>{ if(!body.serverId||r.serverId===body.serverId)r.read=1; }); renderLogs(); updateLogBadges(); snack('Отмечено просмотренным: '+(j.changed||0)); }
+  };
   $('ldCommentBtn').onclick=()=>{
     if(!logSel)return;
     const v=($('ldComment').value||'').trim();
@@ -172,5 +210,18 @@ function initLogsUI(){
     setTimeout(()=>{const b=$('ldCommentBtn');if(b)b.disabled=false;},600);
   };
   $('ldComment').oninput=()=>{if(logSel)logCommentCache[logSel.serverId+':'+logSel.id]=$('ldComment').value;};
+  // Подтвердить/Снять (переключатель отметки для выбранного события).
+  $('ldAckBtn').onclick=()=>{ if(logSel)toggleSelRead(logSel.serverId, logSel.id, logSel.ts); };
+  // Поиск ошибки в Google: в начале — модель сервера, затем текст ошибки.
+  $('ldGoogleBtn').onclick=()=>{
+    if(!logSel)return;
+    const inv=dbgInv[logSel.serverId];
+    const model=logsModels[logSel.serverId] || (inv?valFrom(inv,['system type','model','model name','product name','system model']):'');
+    const err=[logSel.sensor,logSel.detail].filter(Boolean).join(' · ');
+    const q=[model,err].filter(Boolean).join(' ')||logSel.tsLabel||'';
+    window.open('https://www.google.com/search?q='+encodeURIComponent(q),'_blank','noopener');
+  };
+  updateLogBadges();
+  setInterval(updateLogBadges, 60000); // бейджи живут и без открытой вкладки
 }
 initLogsUI();

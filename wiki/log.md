@@ -1289,3 +1289,20 @@ r.events || [] — пустой SEL-ответ (сбой чтения SEL) СТ�
 - /api/ipmi/sel: отдаёт накопленные sel_events (доступны и при недоступном
   сервере), при отсутствии — снимок последнего опроса (pollCache.sel_last).
 Проверено: recordPollFailure журнал не трогает; npm test OK.
+
+## [2026-09-14] feat | журналы: непрочитанные, бейджи реальные, «просмотрено всё»
+Владелец: бейджи «Журналы» и колокольчик показывали захардкоженное «3», а по
+факту критических 15. Нужны реальные счётчики, «просмотрено всё» и флаг на
+каждом событии.
+- db: колонка sel_events.read (миграция ALTER при отсутствии);
+  getSelEvents() отдаёт read; markSelRead(serverId,selId,selTs,read);
+  markAllSelRead(serverId|null,read); unreadSel() -> {total,critical,byServer}.
+- API: POST /api/sel/read (одно {serverId,id,ts,read} или всё {all,serverId?});
+  GET /api/sel/unread -> счётчики.
+- web/index.html: бейджи получили id (logsBadge/alertsBadge, скрыты при 0);
+  в тулбаре журналов кнопки «Только новые» и «Просмотрено всё».
+- web/js/logs.js: read в строках (точка у события — клик ставит/снимает
+  отметку), фильтр «только новые», «Просмотрено всё» (по выбранному серверу
+  или всем), updateLogBadges() (logs=непрочитанные, alerts=непрочитанные
+  критические) + авто-обновление раз в 60с. test/web-split обновлён.
+npm test OK.

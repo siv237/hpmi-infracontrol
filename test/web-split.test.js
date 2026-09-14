@@ -84,7 +84,7 @@ const EXPECTED_FUNCTIONS = [
   // overview
   'stChip','drawAvailabilityChart','loadOverview','renderOverviewRows','buildGroupFilter','startOverview',
   // logs
-  'logTs','logSevChip','loadLogs','filteredLogs','renderLogs','buildLogServerFilter','selectLog','initLogsUI',
+  'logTs','logSevChip','loadLogs','filteredLogs','renderLogs','buildLogServerFilter','selectLog','initLogsUI','updateLogBadges','toggleSelRead',
   // templates (модули платформ)
   'tplStatusBadge','tplChips','tplAccess','tplCapList','tplEngineBadge','tplRowHtml','tplDetailsHtml','tplGroupByVendor','renderTplModules','loadTemplates',
   // auth

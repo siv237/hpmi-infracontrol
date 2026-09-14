@@ -195,6 +195,9 @@ export function initDb(dbFile = DB_FILE) {
   ]) {
     if (!cols.has(col)) db.exec(`ALTER TABLE server_state ADD COLUMN ${col} ${ddl}`);
   }
+  // sel_events: флаг «просмотрено» (появился позже — доставляем колонку).
+  const selCols = new Set(db.prepare('PRAGMA table_info(sel_events)').all().map((c) => c.name));
+  if (!selCols.has('read')) db.exec('ALTER TABLE sel_events ADD COLUMN read INTEGER NOT NULL DEFAULT 0');
   return db;
 }
 
@@ -602,12 +605,36 @@ export function pollCache(serverId) {
 // сохраняется, даже если сервер недоступен. Дедуп обеспечен индексом.
 export function getSelEvents(serverId, limit = 500) {
   if (!db) initDb();
-  const rows = db.prepare('SELECT sel_id, sel_ts, sensor, detail, category, level, first_seen FROM sel_events WHERE server_id=? ORDER BY first_seen DESC, id DESC LIMIT ?').all(serverId, limit);
+  const rows = db.prepare('SELECT server_id, sel_id, sel_ts, sensor, detail, category, level, read, first_seen FROM sel_events WHERE server_id=? ORDER BY first_seen DESC, id DESC LIMIT ?').all(serverId, limit);
   if (!rows.length) return { events: [], ts: null };
   return {
-    events: rows.map((r) => ({ id: r.sel_id, ts: r.sel_ts, sensor: r.sensor, detail: r.detail, category: r.category || 'other', level: r.level || 'info' })),
+    events: rows.map((r) => ({ serverId: r.server_id, id: r.sel_id, ts: r.sel_ts, sensor: r.sensor, detail: r.detail, category: r.category || 'other', level: r.level || 'info', read: r.read ? 1 : 0 })),
     ts: new Date(rows[0].first_seen).toISOString(),
   };
+}
+
+// Отметка «просмотрено» для одного события (server_id + sel_id + sel_ts).
+export function markSelRead(serverId, selId, selTs, read = 1) {
+  if (!db) initDb();
+  return db.prepare('UPDATE sel_events SET read=? WHERE server_id=? AND sel_id=? AND sel_ts=?')
+    .run(read ? 1 : 0, serverId, selId, selTs).changes;
+}
+
+// Отметить всё просмотренным (по серверу или глобально). read=0 — снять.
+export function markAllSelRead(serverId = null, read = 1) {
+  if (!db) initDb();
+  if (serverId) return db.prepare('UPDATE sel_events SET read=? WHERE server_id=?').run(read ? 1 : 0, serverId).changes;
+  return db.prepare('UPDATE sel_events SET read=?').run(read ? 1 : 0).changes;
+}
+
+// Счётчики НЕпрочитанных (для бейджей «Журналы»/«Оповещения»).
+export function unreadSel() {
+  if (!db) initDb();
+  const total = db.prepare('SELECT COUNT(*) c FROM sel_events WHERE read=0').get().c;
+  const critical = db.prepare("SELECT COUNT(*) c FROM sel_events WHERE read=0 AND level='critical'").get().c;
+  const byServer = {};
+  for (const r of db.prepare('SELECT server_id, COUNT(*) c FROM sel_events WHERE read=0 GROUP BY server_id').all()) byServer[r.server_id] = r.c;
+  return { total, critical, byServer };
 }
 
 export function getLastKnown(serverId) {
