@@ -11,17 +11,32 @@ function fetchRoot(cfg, timeoutMs = 4000) {
   const mod = secure ? https : http;
   const tlsOpts = secure ? permissiveTlsOptions() : {};
   return new Promise((resolve) => {
-    const done = (o) => { try { req.destroy(); } catch {} resolve(o); };
-    const req = mod.get(
+    // Гарантия завершения: некоторые BMC (напр. IBM IMM) закрывают соединение,
+    // НЕ присылая 'end' — резолвим и по 'close', плюс жёсткий таймаут. Иначе
+    // проба висит вечно и блокирует matchPlatform (подбор платформы).
+    let settled = false;
+    let req = null;
+    let hard = null;
+    const done = (o) => {
+      if (settled) return;
+      settled = true;
+      if (hard) clearTimeout(hard);
+      try { req && req.destroy(); } catch {}
+      resolve(o);
+    };
+    hard = setTimeout(() => done({ error: 'timeout', title: '', www: '', server: '' }), timeoutMs + 1500);
+    req = mod.get(
       { host, port, path: '/', ...tlsOpts, headers: { 'User-Agent': 'Mozilla/5.0' } },
       (res) => {
         let body = '';
         res.setEncoding('latin1');
-        res.on('data', (c) => { body += c; if (body.length > 20000) res.destroy(); });
-        res.on('end', () => {
+        const build = () => {
           const title = (/<title[^>]*>([^<]*)/i.exec(body) || [])[1] || '';
           done({ status: res.statusCode, server: res.headers.server || '', www: res.headers['www-authenticate'] || '', title });
-        });
+        };
+        res.on('data', (c) => { body += c; if (body.length > 20000) res.destroy(); });
+        res.on('end', build);
+        res.on('close', build);   // fallback: BMC без 'end' (IBM IMM)
         res.on('error', () => done({ title: '', www: '', server: '' }));
       },
     );

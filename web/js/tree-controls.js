@@ -30,11 +30,12 @@ function openDlg(s,preset){
     const host=$('d_host').value.trim();
     if(!host){snack('Введите адрес сервера');return;}
     const out=$('dlgCheckOut');
+    const cfg={host,username:$('d_user').value.trim(),password:$('d_pass').value,port:Number($('d_port').value)||80,secure:$('d_secure').checked};
+    // Та же модалка «Пробник», что и во вкладке «Шаблоны»: доступность ->
+    // IPMI -> HTTP(S). Работает по введённым данным (сервер ещё не сохранён).
+    openProbeModal({cfg,title:'Пробник: '+host});
     out.innerHTML='<div class="dc-loading">Проверяю…</div>';
-    const r=await api('/api/check',{method:'POST',body:JSON.stringify({
-      host,username:$('d_user').value.trim(),password:$('d_pass').value,
-      port:Number($('d_port').value)||80,secure:$('d_secure').checked,
-    })});
+    const r=await api('/api/check',{method:'POST',body:JSON.stringify(cfg)});
     if(r.okResp===false){out.innerHTML='';return;}
     out.innerHTML=dlgCheckHtml(r);
   };

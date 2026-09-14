@@ -12,12 +12,12 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { testIrmc } from './platforms/mahogany-avr/irmc.js';
-import { matchPlatform, listPlatforms } from './sdk/registry.js';
+import { matchPlatform, listPlatforms, matchPlatformByIpmi } from './sdk/registry.js';
 import * as ipmi from './ipmi.js';
 import * as db from './db.js';
 import { checkChannels, ping as pingChannel, tcpPort } from './channels.js';
 import { matchBmcModule } from './bmc-registry.js';
-import { listServers, saveServer, deleteServer, getServer, updateServer } from './store.js';
+import { listServers, saveServer, deleteServer, getServer, updateServer, setServerPlatform } from './store.js';
 import { listUsers, saveUser, updateUser, deleteUser, verifyPasswordByLogin, updatePassword, migrateLegacy } from './users-store.js';
 import { decrypt as decryptLegacyBox, getKey } from './crypto-box.js';
 import { discover, getSession, inventory, parseInventory, webAuthDiag } from './discover.js';
@@ -147,6 +147,9 @@ async function startSession(sess, host, user, pass, port, secure) {
   let plat = null;
   try { plat = await matchPlatform(conn, SDK); }
   catch (e) { if (process.env.IRMC_DEBUG === '1') console.log('[platforms] probe:', e.message); }
+  // Запомнить определённую платформу — вкладка «Шаблоны» читает привязку из
+  // хранилища, без сетевых проб (мгновенно).
+  if (plat && sess.serverId) { setServerPlatform(sess.serverId, plat.manifest.id).catch(() => {}); }
   if (plat && plat.impl && typeof plat.impl.createConsole === 'function') {
     const sessionCfg = await plat.impl.login(conn, SDK);
     const cli = plat.impl.createConsole(sessionCfg, {
@@ -372,6 +375,7 @@ const server = http.createServer(async (req, res) => {
       }
     }
     const sess = createSession(stored.name || stored.host, stored.host);
+    sess.serverId = stored.id;   // для сохранения определённой платформы
     try {
       await startSession(sess, stored.host, stored.username, stored.password || '', stored.port, stored.secure);
       await waitLive(sess, 10000);
@@ -753,6 +757,7 @@ const server = http.createServer(async (req, res) => {
     let plat = null;
     try { plat = await matchPlatform(conn, SDK); }
     catch (e) { if (process.env.IRMC_DEBUG === '1') console.log('[platforms] probe:', e.message); }
+    if (plat) setServerPlatform(srv.id, plat.manifest.id).catch(() => {});
     if (!plat || !plat.impl || typeof plat.impl.createMedia !== 'function') {
       throw new Error('платформа не поддерживает виртуальные носители (нет модуля createMedia)');
     }
@@ -1058,22 +1063,77 @@ const server = http.createServer(async (req, res) => {
     try { return json(res, 200, { ok: true, modules: await listPlatforms() }); }
     catch (e) { return json(res, 500, { ok: false, error: String(e.message || e) }); }
   }
-  // Сопоставление подключённых серверов шаблонам (по сигнатуре, без кредов).
+  // Привязка серверов к шаблонам — ТОЛЬКО из хранилища (servers.json),
+  // БЕЗ сетевых проб к железу: вкладка «Шаблоны» должна открываться мгновенно.
+  // id платформы записывается ядром при подборе (коннект/маунт/добавление).
   if (url.pathname === '/api/platforms/servers' && req.method === 'GET') {
     try {
       const list = await listServers(false);
-      const servers = await Promise.all(list.map(async (s) => {
-        let m = null;
-        try {
-          m = await matchPlatform({ host: s.host, port: s.port || 80, secure: !!s.secure, username: s.usernamePlain || '', password: '' }, SDK);
-        } catch {}
-        return {
-          id: s.id, name: s.name || s.host, host: s.host, port: s.port || 80, secure: !!s.secure,
-          moduleId: m ? m.manifest.id : null, moduleTitle: m ? m.manifest.title : null,
-        };
+      const servers = list.map((s) => ({
+        id: s.id, name: s.name || s.host, host: s.host, port: s.port || 80, secure: !!s.secure,
+        moduleId: s.platform || null, moduleTitle: null,
       }));
       return json(res, 200, { ok: true, servers });
     } catch (e) { return json(res, 500, { ok: false, error: String(e.message || e) }); }
+  }
+
+  // Комбинированная проба сервера (модалка «Пробник» во вкладке «Шаблоны» и
+  // при проверке добавляемого сервера). Стриминг NDJSON: стадии появляются
+  // в реальном времени. Порядок: доступность (ping/порты) -> IPMI -> HTTP(S).
+  // {serverId} — сохранённый сервер; либо сырые {host,port,secure,username,password}.
+  if (url.pathname === '/api/platforms/probe' && req.method === 'POST') {
+    const body = await readJson(req, res);
+    if (!body) return;
+    let cfg = null;
+    try { cfg = body.serverId ? await getServer(body.serverId) : body; } catch {}
+    if (!cfg || !cfg.host) return json(res, 400, { ok: false, error: 'host required' });
+    res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
+    const send = (o) => { try { res.write(JSON.stringify(o) + '\n'); } catch {} };
+    const t0 = Date.now();
+    const ms = () => Date.now() - t0;
+    const save = async (id) => { if (body.serverId && id) { try { await setServerPlatform(body.serverId, id); } catch {} } };
+    try {
+      // Стадия 1: доступность — ping + TCP-порты (без HTTP-запроса).
+      send({ stage: 'reach', state: 'run' });
+      const host = cfg.host, port = Number(cfg.port || 80);
+      const [ping, tcp] = await Promise.all([
+        pingChannel(host, 3000).catch(() => null),
+        tcpPort(host, port, 4000).catch(() => false),
+      ]);
+      const tcp443 = (port === 443) ? tcp : await tcpPort(host, 443, 4000).catch(() => false);
+      const reachable = !!(ping || tcp || tcp443);
+      send({ stage: 'reach', state: 'done', ping, tcp, tcp443, reachable, ms: ms() });
+      if (!reachable) { send({ stage: 'result', state: 'done', moduleId: null, reason: 'недоступен', ms: ms() }); res.end(); return; }
+
+      // Стадия 2: IPMI-подпись (быстро) -> сопоставление по manifest.signatures.ipmi.
+      let ipmiId = null;
+      if (cfg.username) {
+        send({ stage: 'ipmi', state: 'run' });
+        try {
+          const r = await ipmi.readNetwork(cfg);
+          const n = r.net || {};
+          ipmiId = { manufacturer: n.manufacturer || '', productId: parseInt(String(n.productId), 10) || null, bmcFirmware: n.bmcFirmware || '' };
+          send({ stage: 'ipmi', state: 'done', ...ipmiId, ms: ms() });
+        } catch (e) { send({ stage: 'ipmi', state: 'error', error: String(e.message || e), ms: ms() }); }
+      } else {
+        send({ stage: 'ipmi', state: 'skip', reason: 'нет учётных данных', ms: ms() });
+      }
+      if (ipmiId) {
+        const m = await matchPlatformByIpmi(ipmiId, SDK).catch(() => null);
+        if (m) { await save(m.manifest.id); send({ stage: 'result', state: 'done', moduleId: m.manifest.id, moduleTitle: m.manifest.title, via: 'ipmi', ms: ms() }); res.end(); return; }
+        send({ stage: 'ipmi', state: 'nomatch', ms: ms() });
+      }
+
+      // Стадия 3: HTTP(S)-пробы модулей (последняя — веб может виснуть).
+      send({ stage: 'web', state: 'run' });
+      let m = null;
+      try { m = await matchPlatform({ host: cfg.host, port: cfg.port || 80, secure: !!cfg.secure, username: cfg.username || '', password: cfg.password || '' }, SDK); } catch {}
+      send({ stage: 'web', state: 'done', matched: !!m, ms: ms() });
+      await save(m && m.manifest.id);
+      send({ stage: 'result', state: 'done', moduleId: m ? m.manifest.id : null, moduleTitle: m ? m.manifest.title : null, via: m ? 'web' : null, ms: ms() });
+      res.end();
+      return;
+    } catch (e) { send({ stage: 'result', state: 'error', error: String(e.message || e), ms: ms() }); res.end(); return; }
   }
 
   if (url.pathname === '/api/servers' && req.method === 'POST') {
@@ -1082,6 +1142,11 @@ const server = http.createServer(async (req, res) => {
     if (!body) return;
     try {
       const saved = await saveServer(body);
+      // Определить платформу в фоне (не блокируя ответ) и запомнить привязку,
+      // чтобы «Шаблоны» сразу её показывали — без проб при открытии вкладки.
+      matchPlatform({ host: body.host, port: Number(body.port || 80), secure: !!body.secure, username: body.username || '', password: body.password || '' }, SDK)
+        .then((m) => { if (m) return setServerPlatform(saved.id, m.manifest.id); })
+        .catch(() => {});
       return json(res, 200, { ok: true, id: saved.id, name: saved.name });
     } catch (e) { return json(res, 400, { ok: false, error: String(e.message || e) }); }
   }
@@ -1290,6 +1355,22 @@ async function pollSensors() {
 }
 setInterval(pollSensors, 60000);
 pollSensors();
+// Фоновый прогрев привязок «сервер → платформа» для вкладки «Шаблоны».
+// Сама вкладка мгновенна и в сеть НЕ ходит; привязки один раз заполняются
+// здесь, в фоне, для серверов, у которых platform ещё неизвестен.
+(async function warmPlatforms() {
+  try {
+    const list = await listServers(false);
+    await Promise.all(list.filter((s) => !s.platform).map(async (s) => {
+      try {
+        const cfg = await getServer(s.id);
+        if (!cfg) return;
+        const m = await matchPlatform({ host: cfg.host, port: cfg.port || 80, secure: !!cfg.secure, username: cfg.username || '', password: cfg.password || '' }, SDK);
+        if (m) await setServerPlatform(s.id, m.manifest.id);
+      } catch {}
+    }));
+  } catch {}
+})();
 // Ретеншн истории (п.5.5): чистка > 30 дней каждые 6 часов
 setInterval(() => { try { db.prune(30); } catch {} }, 6 * 3600 * 1000);
 

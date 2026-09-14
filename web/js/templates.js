@@ -6,6 +6,61 @@ const tplServersByModule={};   // moduleId -> [servers]
 const tplExpanded=new Set();   // раскрытые id шаблонов
 let tplQuery='';
 
+// ---- Модалка «Пробник» (общая): стриминг стадий комбинированной пробы ----
+// Порядок: доступность (ping/порты) -> IPMI -> HTTP(S). Порядок задаёт сервер
+// (/api/platforms/probe), сюда приходят NDJSON-события.
+function closeProbeModal(){ const b=document.getElementById('probeModalBack'); if(b)b.style.display='none'; }
+function probeLogLine(txt){ const log=document.getElementById('probeLog'); if(!log)return; const d=document.createElement('div'); d.style.margin='2px 0'; d.innerHTML=txt; log.appendChild(d); log.scrollTop=log.scrollHeight; }
+function openProbeModal(opts){
+  opts=opts||{};
+  let back=document.getElementById('probeModalBack');
+  if(!back){
+    back=document.createElement('div'); back.id='probeModalBack';
+    back.style.cssText='position:fixed;inset:0;background:rgba(20,25,40,.45);display:none;align-items:center;justify-content:center;z-index:9999';
+    back.innerHTML='<div style="background:#fff;border-radius:10px;max-width:560px;width:92%;padding:16px 18px;box-shadow:0 12px 44px rgba(0,0,0,.32)">'
+      +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><b id="probeTitle" style="font-size:15px">Пробник</b><span style="flex:1"></span>'
+      +'<button id="probeClose" style="cursor:pointer;border:1px solid var(--line,#e3e7ee);border-radius:6px;background:#fff;padding:2px 9px">✕</button></div>'
+      +'<div id="probeLog" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;line-height:1.5;max-height:340px;overflow:auto;background:#f7f9fc;border:1px solid #e3e7ee;border-radius:8px;padding:10px 12px"></div></div>';
+    document.body.appendChild(back);
+    back.onclick=(e)=>{ if(e.target===back)closeProbeModal(); };
+    document.getElementById('probeClose').onclick=closeProbeModal;
+  }
+  document.getElementById('probeTitle').textContent=opts.title||'Пробник';
+  const log=document.getElementById('probeLog'); log.innerHTML=''; back.style.display='flex';
+  const C={run:'#b7791f',ok:'#1f9d55',bad:'#c53030',info:'#4a5568'};
+  const L=(ic,col,txt)=>probeLogLine('<span style="color:'+col+'">'+ic+'</span> '+txt);
+  const handle=(ev)=>{
+    if(ev.stage==='reach'&&ev.state==='run')L('⏳',C.run,'Доступность: ping + TCP-порты…');
+    else if(ev.stage==='reach'&&ev.state==='done'){
+      const ports=['tcp '+ev.tcp,'tcp443 '+ev.tcp443].filter(Boolean);
+      L(ev.reachable?'✓':'✕',ev.reachable?C.ok:C.bad,'Пинг: '+(ev.ping?'ok':'—')+' · '+(ev.tcp?'порт открыт':(ev.reachable?'через 443':'нет ответа'))+' · '+ev.ms+' мс');
+    }
+    else if(ev.stage==='ipmi'&&ev.state==='run')L('⏳',C.run,'IPMI (RMCP+): запрос…');
+    else if(ev.stage==='ipmi'&&ev.state==='done')L('✓',C.ok,'IPMI: '+esc(ev.manufacturer||'?')+(ev.bmcFirmware?' · BMC '+esc(ev.bmcFirmware):'')+(ev.productId?(' · prodId '+ev.productId):'')+' · '+ev.ms+' мс');
+    else if(ev.stage==='ipmi'&&ev.state==='error')L('✕',C.bad,'IPMI: '+esc(ev.error||'ошибка'));
+    else if(ev.stage==='ipmi'&&ev.state==='skip')L('—',C.info,'IPMI пропущен: '+esc(ev.reason||''));
+    else if(ev.stage==='ipmi'&&ev.state==='nomatch')L('—',C.info,'IPMI-подпись не распознана — перехожу к веб-пробам…');
+    else if(ev.stage==='web'&&ev.state==='run')L('⏳',C.run,'HTTP(S)-пробы модулей… (веб может отвечать медленно)');
+    else if(ev.stage==='web'&&ev.state==='done')L(ev.matched?'✓':'—',ev.matched?C.ok:C.info,'Веб: '+(ev.matched?'платформа распознана':'не распознано')+' · '+ev.ms+' мс');
+    else if(ev.stage==='result'&&ev.state==='done'){
+      if(ev.moduleId)L('■',C.ok,'ИТОГ: <b>'+esc(ev.moduleTitle||ev.moduleId)+'</b>'+(ev.via?(' <span style="color:'+C.info+'">(по '+ev.via.toUpperCase()+')</span>'):'')+' · '+ev.ms+' мс');
+      else L('■',C.bad,'ИТОГ: шаблон не определён'+(ev.reason?(' ('+esc(ev.reason)+')'):'')+' · '+ev.ms+' мс');
+      if(typeof opts.onDone==='function'){ try{ opts.onDone(ev); }catch{} }
+    }
+    else if(ev.stage==='result'&&ev.state==='error')L('✕',C.bad,'Ошибка пробы: '+esc(ev.error||''));
+  };
+  const body=opts.serverId?{serverId:opts.serverId}:{...(opts.cfg||{})};
+  L('▶',C.info,'Старт пробы…');
+  fetch('/api/platforms/probe',{method:'POST',headers:Object.assign({'Content-Type':'application/json'},(typeof authToken!=='undefined'&&authToken)?{'Authorization':'Bearer '+authToken}:{}),body:JSON.stringify(body)})
+    .then(async(resp)=>{
+      if(!resp.body){ L('✕',C.bad,'Стриминг недоступен'); return; }
+      const reader=resp.body.getReader(); const dec=new TextDecoder(); let buf='';
+      for(;;){ const {done,value}=await reader.read(); if(done)break; buf+=dec.decode(value,{stream:true});
+        let i; while((i=buf.indexOf('\n'))>=0){ const ln=buf.slice(0,i); buf=buf.slice(i+1); if(ln.trim()){ try{ handle(JSON.parse(ln)); }catch{} } } }
+    })
+    .catch((e)=>L('✕',C.bad,'Ошибка: '+esc(String(e&&e.message||e))));
+}
+
 function tplStatusBadge(st){
   const c = st==='verified' ? '#1f9d55' : (st==='experimental' ? '#b7791f' : '#8a94a6');
   const bg = st==='verified' ? '#e6f6ec' : (st==='experimental' ? '#fdf3e2' : '#eef1f6');
@@ -106,7 +161,7 @@ function renderTplModules(mods){
     const open=tplExpanded.has('__unmatched__');
     html+='<div style="display:flex;align-items:center;gap:10px;margin:14px 2px 6px"><b style="font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--faint)">Серверы без шаблона</b><div style="flex:1;height:1px;background:var(--line,#e3e7ee)"></div></div>';
     html+='<div><div class="tpl-head" data-tpl="__unmatched__" style="display:flex;align-items:center;gap:10px;padding:9px 12px;cursor:pointer;border:1px solid var(--line,#e3e7ee);border-radius:8px;background:#fff"><span style="width:10px;color:var(--faint);transform:rotate('+(open?'90':'0')+'deg)">▸</span><b style="font-size:14px">Не определены</b><span style="flex:1"></span><span style="color:var(--faint);font-size:12px">'+un.length+'</span></div>'
-      + (open?'<div style="border:1px solid var(--line,#e3e7ee);border-top:none;border-radius:0 0 8px 8px;padding:12px;background:#fafbfd">'+un.map(s=>'<div>'+esc(s.name)+' <span style="color:var(--faint)">'+esc(s.host)+':'+esc(s.port)+'</span></div>').join('')+'</div>':'')
+      + (open?'<div style="border:1px solid var(--line,#e3e7ee);border-top:none;border-radius:0 0 8px 8px;padding:12px;background:#fafbfd">'+un.map(s=>'<div style="display:flex;align-items:center;gap:8px;padding:3px 0">'+esc(s.name)+' <span style="color:var(--faint)">'+esc(s.host)+':'+esc(s.port)+'</span><span style="flex:1"></span><button class="tpl-match" data-sid="'+esc(s.id)+'" title="Переопросить сервер и определить шаблон" style="font-size:12px;padding:2px 10px;border:1px solid var(--line,#e3e7ee);border-radius:6px;background:#fff;cursor:pointer">Определить</button></div>').join('')+'</div>':'')
     + '</div>';
   }
   box.innerHTML=html;
@@ -129,8 +184,24 @@ async function loadTemplates(force){
   tplLoaded=true;
   renderTplModules(tplModules);
 }
-// делегирование: клик по строке-заголовку раскрывает/сворачивает шаблон
-$('tplList').addEventListener('click',(e)=>{
+// делегирование: клик по строке-заголовку раскрывает/сворачивает шаблон;
+// кнопка «Определить» переопрашивает сервер и переносит его в нужный шаблон.
+$('tplList').addEventListener('click',async(e)=>{
+  const mb=e.target.closest('.tpl-match');
+  if(mb){
+    e.preventDefault(); e.stopPropagation();
+    const sid=mb.getAttribute('data-sid');
+    const s=tplUnmatched.find(x=>x.id===sid);
+    openProbeModal({serverId:sid,title:'Пробник: '+(s?s.name:sid)},{onDone:(res)=>{
+      if(res&&res.moduleId){
+        const i=tplUnmatched.findIndex(x=>x.id===sid);
+        if(i>=0){ const [ss]=tplUnmatched.splice(i,1); ss.moduleId=res.moduleId; (tplServersByModule[res.moduleId]=tplServersByModule[res.moduleId]||[]).push(ss); }
+        tplExpanded.add(res.moduleId);
+        renderTplModules(tplModules);
+      }
+    }});
+    return;
+  }
   const h=e.target.closest('.tpl-head'); if(!h||!tplModules)return;
   const id=h.getAttribute('data-tpl');
   if(tplExpanded.has(id))tplExpanded.delete(id); else tplExpanded.add(id);

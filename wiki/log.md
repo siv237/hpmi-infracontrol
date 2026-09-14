@@ -1352,3 +1352,92 @@ platforms/mahogany-avr/irmc.js и irmc-decode.js восстановлены из
 web templates/logs/detail, dev-env.md, test-фикс — у нас уже есть).
 Проверка: node --test server/platforms/hp-lo100/test.js и
 server/platforms/hp-ilo/test.js; git status — ядро чисто.
+
+## [2026-09-14] ingest | IBM IMM: разведка BMC 10.67.17.17 + модуль ibm-imm
+Владелец добавил IBM-сервер 10.67.17.17 и разрешил читающие пробы.
+Разведка (GET+IPMI, без изменений на BMC):
+- BMC: IBM IMM (Integrated Management Module), fw 8.41, IPMI 2.0,
+  mfg id 20301 «IBM eServer X», productId 0x0144, board 80Y9299 (2012).
+- Веб: только HTTPS:443, Dojo-UI /designs/imm/ (imm.layer-login, ibmdojo);
+  Redfish нет (404), /login 404, /data/login.js 401. HTTP:80 не отвечает.
+- IPMI: SEL 35 событий, lan print, FRU baseboard; SDR-сенсоры (temps/fans)
+  не отдались, chassis power null.
+- Консоль: НЕ VNC — IBM Custom Avocent KVM; JNLP
+  viewer(<host>@443@…@jnlp@<user>@…).jnlp c com.avocent.ibmc.kvm.Main,
+  kmport/vport=3900, user=0x… (токен), immversion=2, vm=1. JAR
+  /designs/imm/aessrp/avctIBMViewer__V030321.jar качается без авторизации.
+Сделано (только новые папки; ядро не тронуто):
+- server/platforms/ibm-imm/ (manifest, probe с matchImm, index probe-only,
+  README, test.js). priority 92 (ниже Fujitsu 100/95 и hp-ilo 94).
+- raw/avctIBMViewer__V030321.jar (источник протокола, 1.17 МБ) + JNLP (владелец).
+- wiki/knowledge/ibm-imm.md + index.md.
+Реестр: 5 платформ; самотесты ibm-imm 2 pass; ядро чисто (git diff пуст).
+Дальше: KVM-мост Avocent IBM Custom (порт 3900) — декомпиляция JAR (CFR),
+разбор handshake/токена/кадров/HID; изолированно от mahogany-avr/hp-lo100.
+
+## [2026-09-14] fix(ui): «Шаблоны» мгновенно — привязка платформы в servers.json
+Проблема: вкладка «Шаблоны» висела «Загрузка…», т.к. /api/platforms/servers
+на каждый сервер звал matchPlatform (сетевые пробы по всем модулям). С ростом
+числа модулей (HP, IBM) стало совсем долго.
+Решение (по прямому указанию владельца; правка ядра разрешена):
+- server/store.js: поле `platform` у сервера (servers.json) + saveServer/
+  mask/listServers/getServer + новый setServerPlatform(id, platform).
+- server/index.js: привязка пишется, когда платформа реально определена —
+  в startSession (коннект), realMount (носитель) и в фоне после добавления
+  сервера (POST /api/servers). /api/platforms/servers больше НЕ делает проб:
+  читает сохранённый platform → вкладка открывается мгновенно.
+- Существующие серверы без platform попадут в «Не определены» до первого
+  коннекта/проверки; далее заполняется автоматически.
+Проверки: node --check, npm test 31 pass/0 fail. Ядро: index.js + store.js
+(единственные правки ядра, согласованы).
+
+## [2026-09-14] fix(platforms): зависание probe mahogany-avr + ложный матч hp-lo100
+При разборе «Шаблонов» найдены два дефекта (оба устранены):
+- mahogany-avr/probe.js fetchRoot ждал только 'end'/'error'; некоторые BMC
+  (IBM IMM) закрывают соединение без 'end' (только 'close') — проба висела
+  вечно и блокировала matchPlatform (коннект/добавление/вкладка). Фикс:
+  резолв и по res 'close' + жёсткий таймаут (timeoutMs+1500). Логика матча
+  S2 не изменена. Правка ядра согласована владельцем.
+- hp-lo100/probe.js matchLo100Root матчил по одному слову «Avocent» — IBM IMM
+  тоже Avocent, была ложная привязка IBM → hp-lo100. Фикс: убрано широкое
+  «Avocent», добавлено исключение IMM (Integrated Management Module/designs/imm).
+Проверено (10.67.17.17): mahogany 513ms matched:false, ami-soc false,
+hp-ilo null, hp-lo100 null, ibm-imm matched:true; matchPlatform → ibm-imm,
+привязка записана в servers.json. npm test 31 pass/0 fail.
+
+## [2026-09-14] feat(ui): кнопка «Определить» + фон-прогрев привязок шаблонов
+По запросу владельца (серверы «выпали» в «Не определены»):
+- Вкладка «Шаблоны» по-прежнему мгновенна и в сеть НЕ ходит.
+- Фоновый прогрев при старте (server/index.js): для серверов без platform
+  один раз зовётся matchPlatform с сохранёнными кредами, результат пишется
+  в servers.json (пробы ограничены по времени, не блокируют запуск).
+- Кнопка «Определить» у каждого сервера в блоке «Серверы без шаблона»
+  (web/js/templates.js) -> POST /api/platforms/match {serverId} (server/index.js):
+  переопрос по явному клику, привязка сохраняется, сервер сразу переезжает
+  в нужный шаблон без перезагрузки (раскрывает этот шаблон).
+- test/web-split.test.js: убраны абсолютные пути (ROOT от import.meta.url,
+  tmp через os.tmpdir()) — переносимость.
+Проверки: node --check, npm test 31 pass/0 fail.
+
+## [2026-09-14] feat(platforms): комбинированная проба + модалка «Пробник»
+По указанию владельца: проба идёт по стадиям «доступность -> IPMI -> HTTP(S)»,
+веб может виснуть — поэтому он последний. Плюс визуальная модалка.
+- registry.js: matchPlatformByIpmi(ipmiId) — быстрый матч по
+  manifest.signatures.ipmi (manufacturer/productIds/firmwareMajor). Данные о
+  железе — в манифестах модулей, ядро платформенно-нейтрально.
+- signatures.ipmi: mahogany-avr (Fujitsu Siemens pid 610/611),
+  ami-soc (Fujitsu Siemens pid 853), hp-ilo (Hewlett-Packard pid 8224),
+  ibm-imm (IBM). hp-lo100 — только веб (kvms.html).
+- server/index.js: POST /api/platforms/probe — стриминг NDJSON, стадии:
+  reach (ping+tcp), ipmi (readNetwork -> matchPlatformByIpmi), web
+  (matchPlatform, последним), result. Сохраняет platform в servers.json.
+  Работает и по serverId, и по сырым {host,port,secure,username,password}.
+- web/js/templates.js: openProbeModal() — общая модалка со стримингом стадий;
+  кнопка «Определить» в «Серверы без шаблона» теперь открывает её и переносит
+  сервер в шаблон по результату.
+- web/js/tree-controls.js: та же модалка при «Проверить» в диалоге добавления
+  сервера (по введённым данным, до сохранения).
+- test/web-split.test.js: новые top-level функции добавлены в белый список.
+Проверено: matchPlatformByIpmi на живых id: S2 pid611->mahogany-avr,
+S4 pid853->ami-soc, IBM pid324->ibm-imm, HP pid8224->hp-ilo.
+npm test 31 pass/0 fail.

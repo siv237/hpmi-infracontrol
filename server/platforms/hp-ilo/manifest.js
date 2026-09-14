@@ -11,6 +11,9 @@ export default {
   // 94: выше hp-lo100 (90), но НИЖЕ Fujitsu-платформ (mahogany-avr 100,
   // ami-soc 95) — HP-пробы не должны идти раньше фуджитсовых.
   priority: 94,
+  // Быстрая IPMI-подпись: HPE iLO 4 (prodId 8224). hp-lo100 — только веб
+  // (kvms.html): по IPMI LO100 от iLO надёжно не отличить.
+  signatures: { ipmi: { manufacturer: 'Hewlett-Packard', productIds: [8224] } },
   supported: [
     { model: 'iLO 4 (ProLiant Gen8/Gen9)', firmware: '2.80', status: 'verified' },
     { model: 'iLO 5 (ProLiant Gen10+)', firmware: '*', status: 'experimental' },

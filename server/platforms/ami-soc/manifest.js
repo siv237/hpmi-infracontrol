@@ -8,6 +8,9 @@ export default {
   family: 'iRMC S4',
   sdk: 1,
   priority: 95,
+  // Быстрая IPMI-подпись: Fujitsu Siemens iRMC S4 (productId 853, живой S4;
+  // BMC fw у S4 отдаётся как 1.00, поэтому опираемся на productId).
+  signatures: { ipmi: { manufacturer: 'Fujitsu Siemens', productIds: [853] } },
   supported: [
     { model: 'iRMC S4', firmware: '7.69F', status: 'verified' },
     { model: 'iRMC S4', firmware: '7.*',   status: 'experimental' },

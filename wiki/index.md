@@ -58,6 +58,10 @@ LLM Wiki проекта iRMC Viewer (этап 1). Страницы в `wiki/`, �
 - [knowledge/hp-ilo-redfish.md](knowledge/hp-ilo-redfish.md) — HPE iLO 4/5:
   опрос по Redfish (`server/redfish.js`), когда RMCP+ выключен (живой baspx03);
   capability-driven фолбэк в `pollSensors`, квёрки iLO 4 fw 2.80.
+- [knowledge/ibm-imm.md](knowledge/ibm-imm.md) — IBM System x IMM/IMM2
+  (10.67.17.17): веб HTTPS/Dojo-IMM, IPMI 2.0/fw 8.41, консоль — IBM Custom
+  Avocent KVM (JNLP `viewer(…).jnlp`, порт 3900, JAR avctIBMViewer), план
+  KVM-моста; модуль `platforms/ibm-imm/` (probe-only).
 - [knowledge/backlog.md](knowledge/backlog.md) — отложенные задачи
   (ретенция данных к «Параметрам сервера», растворение bmc-registry и пр.).
 - [knowledge/server-deploy.md](knowledge/server-deploy.md) — ⚙ служебная

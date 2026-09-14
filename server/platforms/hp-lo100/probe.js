@@ -39,11 +39,15 @@ function plainGet(secure, host, port, path, timeoutMs = 6000) {
 }
 
 // Чистый матч по HTML «/» LO100 (title = BMC HTTP Server, меню апплета).
+// ВАЖНО: НЕ матчить по одному слову «Avocent» — IBM IMM тоже Avocent (там
+// «Integrated Management Module»), это была ложная привязка.
 export function matchLo100Root(status, body) {
   if (status !== 200) return false;
-  const title = /<title>([^<]*)<\/title>/i.exec(body || '');
+  const b = body || '';
+  if (/Integrated Management Module|\/designs\/imm\//i.test(b)) return false; // IBM IMM — не LO100
+  const title = /<title>([^<]*)<\/title>/i.exec(b);
   if (title && /^BMC HTTP Server$/i.test(title[1].trim())) return true;
-  return /Lights-Out\s*100|MahoganyViewer|Avocent/i.test(body || '');
+  return /Lights-Out\s*100|MahoganyViewer/i.test(b);
 }
 
 // Матч по kvms.html (APPLET MahoganyViewer + httpdata) — высшая уверенность.

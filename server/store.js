@@ -35,6 +35,7 @@ function mask(entry) {
     secure: entry.secure,
     group: entry.group || '',
     root: entry.root || '',
+    platform: entry.platform || '',   // id модуля платформы (заполняется ядром при подборе)
     hasPassword: !!(entry.enc),
     createdAt: entry.createdAt,
   };
@@ -46,13 +47,13 @@ export async function listServers(withSecrets = false) {
   return db.map((e) => {
     if (withSecrets) {
       const dec = e.enc ? decrypt(e.enc) : { host: e.host || '', username: e.usernamePlain || '', password: '', httpdata: '' };
-      return { ...dec, id: e.id, name: e.name, port: e.port, secure: e.secure, createdAt: e.createdAt };
+      return { ...dec, id: e.id, name: e.name, port: e.port, secure: e.secure, platform: e.platform || '', createdAt: e.createdAt };
     }
     return { ...mask(e) };
   });
 }
 
-export async function saveServer({ name, host, username, password, port = 80, secure = false, httpdata = '', group = '', root = '' }) {
+export async function saveServer({ name, host, username, password, port = 80, secure = false, httpdata = '', group = '', root = '', platform = '' }) {
   await getKey();
   const db = await readDb();
   const id = crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
@@ -66,6 +67,7 @@ export async function saveServer({ name, host, username, password, port = 80, se
     secure,
     group: group === null || group === undefined ? '' : String(group).trim(),
     root: root === null || root === undefined ? '' : String(root).trim(),
+    platform: platform ? String(platform) : '',
     enc,
     createdAt: new Date().toISOString(),
   };
@@ -115,5 +117,19 @@ export async function getServer(id) {
   const e = db.find((x) => x.id === id);
   if (!e) return null;
   const dec = e.enc ? decrypt(e.enc) : { host: e.host || '', username: e.usernamePlain || '', password: '', httpdata: '' };
-  return { ...dec, id: e.id, name: e.name, port: e.port, secure: e.secure };
+  return { ...dec, id: e.id, name: e.name, port: e.port, secure: e.secure, platform: e.platform || '' };
+}
+
+// Запомнить определённую платформу сервера (id модуля из реестра), чтобы
+// вкладка «Шаблоны» отображала привязку БЕЗ сетевых проб. Креды не трогает.
+export async function setServerPlatform(id, platform) {
+  await getKey();
+  const db = await readDb();
+  const e = db.find((x) => x.id === id);
+  if (!e) return false;
+  const p = platform ? String(platform) : '';
+  if ((e.platform || '') === p) return true;
+  e.platform = p;
+  await writeDb(db);
+  return true;
 }

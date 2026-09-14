@@ -2,9 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
 import { execSync, spawnSync } from 'node:child_process';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
 
-const ROOT = '/home/siv/proj/IPMI-Viewer';
+// Корень репозитория — от расположения теста (переносимо на чужих машинах),
+// без абсолютного пути конкретной машины.
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const web = join(ROOT, 'web');
 
 const CSS_FILES = ['base.css','components.css','dashboard.css','servers.css','console.css','events.css','logs.css','ui.css'];
@@ -42,7 +46,7 @@ for (const f of JS_FILES) {
 
 test('Все JS-модули вместе (в порядке подключения) — синтаксически корректный файл', () => {
   const concat = JS_FILES.map(f => readFileSync(join(web, 'js', f), 'utf8')).join('\n');
-  const tmp = '/tmp/_concatenated.mjs';
+  const tmp = join(tmpdir(), '_concatenated.mjs');
   writeFileSync(tmp, concat);
   const r = execSync('node --check ' + tmp).toString(); // execSync throws on failure
   try { unlinkSync(tmp); } catch {}
@@ -86,7 +90,7 @@ const EXPECTED_FUNCTIONS = [
   // logs
   'logTs','logSevChip','loadLogs','filteredLogs','renderLogs','buildLogServerFilter','selectLog','initLogsUI','updateLogBadges','toggleSelRead',
   // templates (модули платформ)
-  'tplStatusBadge','tplChips','tplAccess','tplCapList','tplEngineBadge','tplRowHtml','tplDetailsHtml','tplGroupByVendor','renderTplModules','loadTemplates',
+  'tplStatusBadge','tplChips','tplAccess','tplCapList','tplEngineBadge','tplRowHtml','tplDetailsHtml','tplGroupByVendor','renderTplModules','loadTemplates','openProbeModal','closeProbeModal','probeLogLine',
   // auth
   'showLogin','hideLogin','enterApp',
 ];

@@ -8,6 +8,9 @@ export default {
   family: 'iRMC S2/S3',
   sdk: 1,
   priority: 100,
+  // Быстрая IPMI-подпись (до веб-проб, веб у legacy BMC медленный/виснет).
+  // Fujitsu Siemens iRMC S2: productId 610/611 (проверено на живых G6).
+  signatures: { ipmi: { manufacturer: 'Fujitsu Siemens', productIds: [610, 611] } },
   supported: [
     { model: 'iRMC S2', firmware: '*', status: 'verified' },
     { model: 'iRMC S3/S3-2', firmware: '*', status: 'experimental' },

@@ -61,6 +61,34 @@ export async function matchPlatform(cfg, sdk) {
   return null;
 }
 
+// Быстрое сопоставление по IPMI-сигнатуре (manufacturer/productId), если
+// модуль объявил manifest.signatures.ipmi. Это «дешёвая» стадия до веб-проб
+// (веб у legacy BMC может виснуть). Возвращает { ...mod, probe } или null.
+export async function matchPlatformByIpmi(ipmiId, sdk) {
+  if (!ipmiId) return null;
+  const mods = await loadPlatforms();
+  const mfg = String(ipmiId.manufacturer || '');
+  const pid = Number(ipmiId.productId) || null;
+  for (const m of mods) {
+    const sig = m.manifest?.signatures?.ipmi;
+    if (!sig) continue;
+    let ok = true;
+    if (sig.manufacturer) {
+      const re = sig.manufacturer instanceof RegExp ? sig.manufacturer : new RegExp(sig.manufacturer, 'i');
+      if (!re.test(mfg)) ok = false;
+    }
+    if (ok && Array.isArray(sig.productIds) && sig.productIds.length) {
+      if (!pid || !sig.productIds.includes(pid)) ok = false;
+    }
+    if (ok && sig.firmwareMajor) {
+      const fwmaj = Number(String(ipmiId.bmcFirmware || '').split('.')[0]) || 0;
+      if (fwmaj !== sig.firmwareMajor) ok = false;
+    }
+    if (ok) return { ...m, probe: { matched: true, confidence: 0.9, info: { via: 'ipmi', manufacturer: mfg, productId: pid } } };
+  }
+  return null;
+}
+
 export async function listPlatforms() {
   const mods = await loadPlatforms();
   return mods.map(({ manifest, dir, impl }) => ({
