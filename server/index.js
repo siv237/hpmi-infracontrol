@@ -1246,8 +1246,10 @@ server.on('upgrade', (req, socket, head) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`iRMC Viewer bridge running at http://localhost:${PORT}`);
+// Слушаем только локальный адрес (наружу — nginx). HOST можно переопределить.
+const HOST = process.env.HOST || '127.0.0.1';
+server.listen(PORT, HOST, () => {
+  console.log(`iRMC Viewer bridge running at http://${HOST}:${PORT}`);
   console.log('Left panel: servers. Right: details + Launch console (noVNC).');
   console.log('GET /api/servers lists stored servers (credentials encrypted at rest).');
 });

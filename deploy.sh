@@ -57,7 +57,10 @@ NGINX_SELF_SIGNED="${NGINX_SELF_SIGNED:-1}"
 NGINX_HTTP_REDIRECT="${NGINX_HTTP_REDIRECT:-1}"
 
 SHIP_NODE_MODULES="${SHIP_NODE_MODULES:-1}"
-REBUILD_SQLITE="${REBUILD_SQLITE:-1}"
+# По умолчанию НЕ пересобираем нативно на сервере: локально собран Node 24
+# (см. .nvmrc), ABI совпадает с серверным Node -> шлём готовый node_modules.
+# Пересборку включать (REBUILD_SQLITE=1) только если версии Node разошлись.
+REBUILD_SQLITE="${REBUILD_SQLITE:-0}"
 INSTALL_PKGS="${INSTALL_PKGS:-1}"
 INSTALL_NODEJS_DEVEL="${INSTALL_NODEJS_DEVEL:-1}"
 
@@ -220,7 +223,11 @@ if [ "$REBUILD_SQLITE" = 1 ]; then
   else
     NODE_HEADERS_DIR="/usr"   # fallback: системные заголовки nodejs-devel
   fi
-  ( cd "$APP_DIR" && npm_config_nodedir="$NODE_HEADERS_DIR" npm rebuild better-sqlite3 --build-from-source ) \
+  # npm 11 больше не принимает --build-from-source/nodedir как CLI-конфиг;
+  # передаём их через env (их читает node-gyp) и явно запрещаем сеть (offline).
+  ( cd "$APP_DIR" && npm_config_nodedir="$NODE_HEADERS_DIR" npm_config_build_from_source=true \
+      npm_config_offline=true npm_config_audit=false npm_config_fund=false \
+      npm rebuild better-sqlite3 ) \
     || echo "[deploy] ! пересборка better-sqlite3 не удалась (будет видно при старте)"
   rm -rf "$APP_DIR/node-headers"
   chown -R "$APP_USER:$APP_USER" "$APP_DIR/node_modules" 2>/dev/null || true
@@ -326,7 +333,7 @@ echo "[deploy] статус:"
 systemctl --no-pager --full status infracontrol.service | sed -n '1,8p' || true
 if systemctl is-active --quiet infracontrol.service; then
   echo "[deploy] OK. Локально (на сервере):"
-  curl -fsS -o /dev/null -w '  http://127.0.0.1:%s HTTP %{http_code}\n' "$APP_PORT/api/me" 2>/dev/null \
+  curl -fsS --max-time 5 -o /dev/null -w "  http://127.0.0.1:$APP_PORT/api/me HTTP %{http_code}\n" "http://127.0.0.1:$APP_PORT/api/me" 2>/dev/null \
     || echo "  (curl-проверка пропущена)"
 else
   echo "[deploy] ! сервис не активен; журнал: journalctl -u infracontrol -n 50"
@@ -346,7 +353,7 @@ echo "  слушает Node (ожидаем 127.0.0.1:$APP_PORT):"
 ss -ltn | awk -v p="$APP_PORT" 'NR>1 && $4 ~ "^127\\.0\\.0\\.1:" p "$" {print "    "$1"  "$4}'
 if [ "$NGINX_ENABLED" = 1 ]; then
   # https + наш серверный блок (без -k curl упрётся в самоподписанный — ок, это ожидаемо)
-  code="$(curl -ksS -o /dev/null -w '%{http_code}' "https://127.0.0.1/" -H "Host: $NGINX_SERVER_NAME" 2>/dev/null || echo 000)"
+  code="$(curl -ksS --max-time 5 -o /dev/null -w '%{http_code}' "https://127.0.0.1/" -H "Host: $NGINX_SERVER_NAME" 2>/dev/null || echo 000)"
   echo "  nginx https (self-signed, Host:$NGINX_SERVER_NAME): HTTP $code (ожидаем 200/301)"
 fi
 REMOTE

@@ -8,7 +8,7 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
-    "test": "node --test test/",
+    "test": "node --test test/*.test.js",
     "test:e2e": "node --test test/e2e-smoke.test.js"
   },
   "dependencies": {
@@ -18,6 +18,6 @@
     "ws": "^8.18.0"
   },
   "engines": {
-    "node": ">=18"
+    "node": "24.18.0"
   }
 }

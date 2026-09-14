@@ -52,6 +52,18 @@ fi
 PORT="${PORT:-1845}"
 export IRMC_DEBUG="$([ "$DEBUG" = 1 ] || [ "${IRMC_DEBUG:-0}" = 1 ] && echo 1 || echo 0)"
 
+# Проект требует Node 24 (.nvmrc): нативный better-sqlite3 собран под ABI Node 24.
+# На dev-машине предпочитаем локально скачанный Node 24 (.cache/node24, вне git).
+NODE24_BIN=""
+for d in "$SCRIPT_DIR"/.cache/node24/node-v24.*-linux-x64/bin; do
+  [ -d "$d" ] && NODE24_BIN="$d" && break
+done
+if [ -n "$NODE24_BIN" ]; then export PATH="$NODE24_BIN:$PATH"; fi
+NODE_MAJOR="$(node -v 2>/dev/null | sed 's/^v\([0-9]*\).*/\1/' || true)"
+if [ "${NODE_MAJOR:-0}" != "24" ]; then
+  echo "ВНИМАНИЕ: node $(node -v 2>/dev/null || echo 'не найден'), проект требует 24.x (.nvmrc); нативный better-sqlite3 может не загрузиться." >&2
+fi
+
 if [ ! -d node_modules ]; then
   echo "node_modules missing -> npm install"
   npm install
